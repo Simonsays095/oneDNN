@@ -14,6 +14,7 @@
 * limitations under the License.
 *******************************************************************************/
 
+#include "gpu/intel/ocl/ocl_utils.h"
 #include "gpu/intel/ocl/rnn/cell_compute.h"
 #include "gpu/intel/ocl/rnn/cell_kind_utility.h"
 #include "gpu/intel/ocl/rnn/common.h"

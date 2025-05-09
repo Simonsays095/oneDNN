@@ -21,7 +21,7 @@ typedef int idx_t;
 #endif
 
 #include "gpu/intel/ocl/concat_common.h"
-#define unroll_for __attribute__((opencl_unroll_hint)) for
+#include "gpu/intel/ocl/ocl_utils.h"
 
 #define SRC_PARAM(n) \
     CS_PARAM(__global const DATA_T *src##n, const idx_t src_ext_offset##n, \

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2024 Intel Corporation
+* Copyright 2024-2025 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -87,4 +87,15 @@ IF_HALF_SUPPORTED(DEF_special_vals(half, 0.0h, 1.0h, -HALF_MAX, HALF_MAX));
 #define ASSUME(x)
 #endif
 
+#define unroll_for __attribute__((opencl_unroll_hint)) for
+#define unroll_for_by(factor) __attribute__((opencl_unroll_hint(factor))) for
+#define unroll_2_for unroll_for_by(2)
+#define unroll_4_for unroll_for_by(4)
+#define unroll_8_for unroll_for_by(8)
+#define unroll_16_for unroll_for_by(16)
+
+#define auto __auto_type
+#define typeof(x) __typeof__(x)
+
+#define for_ for
 #endif // GPU_INTEL_OCL_OCL_UTILS_H

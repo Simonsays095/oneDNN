@@ -15,6 +15,7 @@
 *******************************************************************************/
 
 #include "gpu/intel/ocl/binary_common.h"
+#include "gpu/intel/ocl/ocl_utils.h"
 
 #if IS_PLAIN_LAYOUT
 KERNEL_ATTR

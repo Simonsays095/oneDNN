@@ -17,6 +17,7 @@
 #include "gpu/intel/ocl/dispatch.h"
 #include "gpu/intel/ocl/ocl_post_ops.h"
 #include "gpu/intel/ocl/ocl_types.h"
+#include "gpu/intel/ocl/ocl_utils.h"
 
 // Read functions.
 inline VECT_DATA_T read_vect_c_block(int idx, const __global DATA_T *ptr,

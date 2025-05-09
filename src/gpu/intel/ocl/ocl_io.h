@@ -181,7 +181,7 @@ DECLARE_AS_BLOCK(double)
             __global dst_dt *dst, __private const src_dt *src, int n) { \
         __attribute__((opencl_unroll_hint)) while (n >= 8) { \
             BLOCK_DT_N(dst_dt, 8) block_val; \
-            for (int i = 0; i < 8; i++) { \
+            unroll_for(int i = 0; i < 8; i++) { \
                 dst_dt val = CONCAT2(into_, dst_dt)(src[i]); \
                 block_val[i] = as_block_data(val); \
             } \
@@ -194,7 +194,7 @@ DECLARE_AS_BLOCK(double)
         } \
         if (n >= 4) { \
             BLOCK_DT_N(dst_dt, 4) block_val; \
-            for (int i = 0; i < 4; i++) { \
+            unroll_for(int i = 0; i < 4; i++) { \
                 dst_dt val = CONCAT2(into_, dst_dt)(src[i]); \
                 block_val[i] = as_block_data(val); \
             } \
@@ -207,7 +207,7 @@ DECLARE_AS_BLOCK(double)
         } \
         if (n >= 2) { \
             BLOCK_DT_N(dst_dt, 2) block_val; \
-            for (int i = 0; i < 2; i++) { \
+            unroll_for(int i = 0; i < 2; i++) { \
                 dst_dt val = CONCAT2(into_, dst_dt)(src[i]); \
                 block_val[i] = as_block_data(val); \
             } \

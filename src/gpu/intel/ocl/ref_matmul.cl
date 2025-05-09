@@ -17,6 +17,7 @@
 #include "gpu/intel/ocl/ocl_philox.h"
 #include "gpu/intel/ocl/ocl_post_ops.h"
 #include "gpu/intel/ocl/ocl_types.h"
+#include "gpu/intel/ocl/ocl_utils.h"
 
 #define offset6D(d0, d1, d2, d3, d4, d5, s0, s1, s2, s3, s4, s5) \
     ((d0) * (s0) + (d1) * (s1) + (d2) * (s2) + (d3) * (s3) + (d4) * (s4) \

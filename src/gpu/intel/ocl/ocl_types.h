@@ -92,18 +92,6 @@
 #include "gpu/intel/ocl/ocl_types_specific.h"
 #include "gpu/intel/ocl/ocl_utils.h"
 
-#define auto __auto_type
-#define typeof(x) __typeof__(x)
-
-#define unroll_for __attribute__((opencl_unroll_hint)) for
-#define unroll_for_by(factor) __attribute__((opencl_unroll_hint(factor))) for
-#define unroll_2_for unroll_for_by(2)
-#define unroll_4_for unroll_for_by(4)
-#define unroll_8_for unroll_for_by(8)
-#define unroll_16_for unroll_for_by(16)
-
-#define for_ for
-
 #if defined(DT_F16) || defined(SRC_DT_F16) || defined(SRC0_DT_F16) \
         || defined(SRC1_DT_F16) || defined(DST_DT_F16) || defined(WEI_DT_F16) \
         || defined(BIA_DT_F16) || defined(ACC_DT_F16)

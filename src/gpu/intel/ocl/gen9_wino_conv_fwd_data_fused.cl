@@ -16,6 +16,7 @@
 
 #include "gpu/intel/ocl/ocl_post_ops.h"
 #include "gpu/intel/ocl/ocl_types.h"
+#include "gpu/intel/ocl/ocl_utils.h"
 #include "gpu/intel/ocl/offsets.h"
 
 #define IW_BLOCK (OW_BLOCK + KW - 1)

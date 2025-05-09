@@ -22,6 +22,7 @@
 #include "gpu/intel/ocl/ocl_conversion.h"
 #include "gpu/intel/ocl/ocl_eltwise.h"
 #include "gpu/intel/ocl/ocl_io.h"
+#include "gpu/intel/ocl/ocl_utils.h"
 
 float fwd_Xnary(bool is_binary, unsigned algorithm, float x, float y,
         float alpha, float beta, float scale) {

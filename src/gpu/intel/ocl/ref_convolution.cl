@@ -18,6 +18,7 @@
 #include "gpu/intel/ocl/ocl_philox.h"
 #include "gpu/intel/ocl/ocl_post_ops.h"
 #include "gpu/intel/ocl/ocl_types.h"
+#include "gpu/intel/ocl/ocl_utils.h"
 
 #undef SRC_OFF
 #undef WEI_OFF
