@@ -15,18 +15,11 @@
 *******************************************************************************/
 
 #include "gpu/intel/ocl/dispatch.h"
-#include "gpu/intel/ocl/ocl_types.h"
+#include "gpu/intel/ocl/ocl_io.h"
+#include "gpu/intel/ocl/ocl_math_utils.h"
 #include "gpu/intel/ocl/ocl_utils.h"
 #include "gpu/intel/ocl/reduction/ocl_reduction.h"
 #include "gpu/intel/ocl/types_interop.h"
-
-#if defined(IS_MAX)
-#define ATOMIC_ACCUMULATE(atomic_p, data) atomic_max_global(atomic_p, data)
-#elif defined(IS_MIN)
-#define ATOMIC_ACCUMULATE(atomic_p, data) atomic_min_global(atomic_p, data)
-#elif defined(IS_MEAN) || defined(IS_SUM)
-#define ATOMIC_ACCUMULATE(atomic_p, data) atomic_add_global(atomic_p, data)
-#endif
 
 // Define accumulation functions
 #define DEF_atomic_accumulate(dt) \
@@ -52,29 +45,29 @@ DEF_atomic_accumulate(float);
 #define BLOCK_READ_DATA_T(data_ptr) \
     AS_VECT_DATA_T(VECT_BLOCK_READ((const __global BLOCK_DATA_T *)data_ptr))
 
-#if VECT_DT_N == 1
-#define GET_ELEM(x, idx) x
+#ifdef OCL_DEBUG
+#define DUMP(str, ...) \
+    do { \
+        const size_t gid[3] \
+                = {get_global_id(0), get_global_id(1), get_global_id(2)}; \
+        const size_t lid[3] \
+                = {get_local_id(0), get_local_id(1), get_local_id(2)}; \
+        const size_t wgid[3] \
+                = {get_group_id(0), get_group_id(1), get_group_id(2)}; \
+        const size_t lin_g = get_global_linear_id(); \
+        const size_t lin_l = get_local_linear_id(); \
+        const uint sglid = get_sub_group_local_id(); \
+        DEBUG_PRINT( \
+                "gid=(%zu,%zu,%zu) lid=(%zu,%zu,%zu) " \
+                "linear=(%zug/%zul/%usg): " str, \
+                gid[0], gid[1], gid[2], lid[0], lid[1], lid[2], lin_g, lin_l, \
+                sglid, ##__VA_ARGS__) \
+    } while (0)
 #else
-#define GET_ELEM(x, idx) x[idx]
+#define DUMP(...)
 #endif
 
-#if VECT_DT_N == 1
-#define TO_VECT_DST TO_DST
-#define VECT_DST_DATA_T DST_DATA_T
-#define VECT_DEF_ACC_TO_FLOAT convert_float
-#else
-#define VECT_DST_DATA_T CONCAT2(DST_DATA_T, VECT_DT_N)
-#define VECT_DEF_ACC_TO_FLOAT CONCAT2(convert_float, VECT_DT_N)
-#if VECT_DT_N == 2
-#define TO_VECT_DST TO_DST2
-#elif VECT_DT_N == 4
-#define TO_VECT_DST TO_DST4
-#elif VECT_DT_N == 8
-#define TO_VECT_DST TO_DST8
-#endif
-#endif
-
-#define REDUCTION_WI_COUNT (ATOMIC_REDUCTION_SIZE * LOCAL_SIZE)
+__constant int REDUCTION_WI_COUNT = ATOMIC_REDUCTION_SIZE * LOCAL_SIZE;
 
 KERNEL_ATTR
 __kernel void atomic_reduce(__global SRC_DATA_T *src,
@@ -89,55 +82,88 @@ __kernel void atomic_reduce(__global SRC_DATA_T *src,
 
     off_t atomic_idx = GWS_GET_OFF(ATOMIC, gws_params);
 
-    // src inner dim is split into the subgroup, vectorization, and inner_group blocks
-    // subgroup and inner_group blocks are dispatched, and the vectorization block
-    // is handled by a single work item. Since the vectorization size is compiled in,
-    // update offsets using it: the inner_group stride is subgroup_size * vec_size
     off_t SRC_OFF = GWS_GET_OFF(SRC, gws_params) - sglid;
-    off_t src_ig_idx = SRC_OFF / subgroup_size;
-    SRC_OFF += src_ig_idx * (VECT_DT_N - 1) * subgroup_size;
-    src += SRC_OFF;
-
-    // Do the same for dst
     off_t DST_OFF = GWS_GET_OFF(DST, gws_params);
-    off_t dst_ig_idx = DST_OFF / subgroup_size;
-    DST_OFF += dst_ig_idx * (VECT_DT_N - 1) * subgroup_size;
+    src += SRC_OFF;
     dst += DST_OFF;
+
+    DUMP("Starting at %d src / %d dst... %p\n", SRC_OFF, DST_OFF, src);
 
     const int beg = local_idx + atomic_idx * LOCAL_SIZE;
     ASSUME(beg < REDUCTION_WI_COUNT);
     const int tail_count = num_reductions % REDUCTION_WI_COUNT;
-    VECT_DEF_ACC_DATA_T acc;
-    init_acc(REDUCTION_ALG, &acc);
-    // XXX: To match static kernel performance, both regular and tail cases
-    // need optimized unrolling. We first detect which case we're in, and dispatch
-    // to the appropriately-unrolled loop.
-    const int iters = div_up(num_reductions - beg, REDUCTION_WI_COUNT);
-    if (beg < tail_count) {
-        unroll_for_by(FULL_UNROLL_FACTOR)(off_t i = 0; i < iters; i++) {
-            const off_t src_off = (beg + i * REDUCTION_WI_COUNT) * inner_size;
-            const VECT_DATA_T src_val = BLOCK_READ_DATA_T(&src[src_off]);
-            unroll_for(uint i = 0; i < VECT_DT_N; i++) {
-                GET_ELEM(acc, i) = reduce(REDUCTION_ALG, GET_ELEM(acc, i),
-                        TO_DEF_ACC_DATA_T(GET_ELEM(src_val, i)), power);
+    src += beg * inner_size;
+
+    __constant int n_inner_iters = I_TILE_SIZE / GWS_SGS_DEFAULT;
+
+    ACC_DT acc[n_inner_iters];
+    unroll_for(int i = 0; i < I_TILE_SIZE; i++)
+            init_acc(REDUCTION_ALG, &acc[i]);
+    for (int red_off = beg; red_off < num_reductions;
+            red_off += REDUCTION_WI_COUNT) {
+        int iters_left = n_inner_iters;
+        DUMP("Reduction iteration %d\n", red_off);
+        // Load data using the largest possible loads
+        while (iters_left >= 8) {
+            DUMP("Unroll 8 iter: %d / %d left\n", iters_left, n_inner_iters);
+            ACC_DT data[8];
+            DUMP("SRC load at %p\n", src);
+            block_load(&data[0], src, 8);
+            unroll_for(int i = 0; i < 8; i++) {
+                const int idx = i + (n_inner_iters - iters_left);
+                acc[idx] = reduce(REDUCTION_ALG, acc[idx],
+                        CONCAT2(into_, ACC_DT)(data[i]), power);
             }
+            iters_left -= 8;
+            src += subgroup_size * 8;
         }
-    } else {
-        unroll_for_by(TAIL_UNROLL_FACTOR)(off_t i = 0; i < iters; i++) {
-            const off_t src_off = (beg + i * REDUCTION_WI_COUNT) * inner_size;
-            const VECT_DATA_T src_val = BLOCK_READ_DATA_T(&src[src_off]);
-            unroll_for(uint i = 0; i < VECT_DT_N; i++) {
-                GET_ELEM(acc, i) = reduce(REDUCTION_ALG, GET_ELEM(acc, i),
-                        TO_DEF_ACC_DATA_T(GET_ELEM(src_val, i)), power);
+        if (iters_left >= 4) {
+            DUMP("Unroll 4 iter: %d / %d left\n", iters_left, n_inner_iters);
+            ACC_DT data[4];
+            DUMP("SRC load at %p\n", src);
+            block_load(&data[0], src, 4);
+            unroll_for(int i = 0; i < 4; i++) {
+                const int idx = i + (n_inner_iters - iters_left);
+                acc[idx] = reduce(REDUCTION_ALG, acc[idx],
+                        CONCAT2(into_, ACC_DT)(data[i]), power);
             }
+            iters_left -= 4;
+            src += subgroup_size * 4;
         }
+        if (iters_left >= 2) {
+            DUMP("Unroll 2 iter: %d / %d left\n", iters_left, n_inner_iters);
+            ACC_DT data[2];
+            DUMP("SRC load at %p\n", src);
+            block_load(&data[0], src, 2);
+            unroll_for(int i = 0; i < 2; i++) {
+                const int idx = i + (n_inner_iters - iters_left);
+                acc[idx] = reduce(REDUCTION_ALG, acc[idx],
+                        CONCAT2(into_, ACC_DT)(data[i]), power);
+            }
+            iters_left -= 2;
+            src += subgroup_size * 2;
+        }
+        if (iters_left == 1) {
+            DUMP("Final iter: %d / %d left\n", iters_left, n_inner_iters);
+            ACC_DT data;
+            DUMP("SRC load at %p\n", src);
+            block_load(&data, src);
+            const int idx = n_inner_iters - iters_left;
+            acc[idx] = reduce(REDUCTION_ALG, acc[idx],
+                    CONCAT2(into_, ACC_DT)(data), power);
+            iters_left--;
+            src += subgroup_size;
+        }
+        ASSUME(iters_left == 0);
+
+        // Offset to the next reduction index
+        src += inner_size * (REDUCTION_WI_COUNT - 1);
     }
 
     // Store results to SLM
-    __local DEF_ACC_DATA_T
-            local_acc_buf[LOCAL_SIZE][GWS_SGS_DEFAULT * VECT_DT_N];
-    unroll_for(int i = 0; i < VECT_DT_N; i++) {
-        local_acc_buf[local_idx][sglid + i * subgroup_size] = GET_ELEM(acc, i);
+    __local ACC_DT local_acc_buf[LOCAL_SIZE][I_TILE_SIZE];
+    unroll_for(int i = 0; i < n_inner_iters; i++) {
+        local_acc_buf[local_idx][sglid + i * subgroup_size] = acc[i];
     }
 
     // Wait for all subgroups to finish
@@ -146,40 +172,31 @@ __kernel void atomic_reduce(__global SRC_DATA_T *src,
     // In the first subgroup of each work group:
     if (local_idx == 0) {
         // Perform the SLM reduction
-        VECT_DEF_ACC_DATA_T local_acc;
-        init_acc(SECONDARY_REDUCTION_ALG, &local_acc);
+        ACC_DT local_acc[n_inner_iters];
+        unroll_for(int i = 0; i < n_inner_iters; i++)
+                init_acc(SECONDARY_REDUCTION_ALG, &local_acc[i]);
 
         unroll_for(int slm_off = 0; slm_off < LOCAL_SIZE; slm_off++) {
-            unroll_for(int v = 0; v < VECT_DT_N; v++) {
-                DEF_ACC_DATA_T slm_data
-                        = local_acc_buf[slm_off][sglid + v * subgroup_size];
-                GET_ELEM(local_acc, v) = reduce(SECONDARY_REDUCTION_ALG,
-                        GET_ELEM(local_acc, v), slm_data, power);
+            unroll_for(int vect_off = 0; vect_off < n_inner_iters; vect_off++) {
+                const int idx = vect_off * subgroup_size + sglid;
+                const ACC_DT slm_data = local_acc_buf[slm_off][idx];
+                local_acc[vect_off] = reduce(SECONDARY_REDUCTION_ALG,
+                        local_acc[vect_off], slm_data, power);
             }
         }
 
         // Finalize data, then (atomically) accumulate into to dst
         // XXX: There's a bug in the compiler that makes the following code break when
         // VECT_DT_N = 1. Instead, here's a workaround:
-#if VECT_DT_N == 1
-        float f = finalize(REDUCTION_ALG, convert_float(GET_ELEM(local_acc, i)),
-                div, power, eps);
-        DST_DATA_T vect_dst_data = TO_DST(f);
-#else
-        VECT_DST_DATA_T vect_dst_data;
-        unroll_for(uint i = 0; i < VECT_DT_N; i++) {
-            float f = finalize(REDUCTION_ALG,
-                    convert_float(GET_ELEM(local_acc, i)), div, power, eps);
-            GET_ELEM(vect_dst_data, i) = TO_DST(f);
-        }
-#endif
-        unroll_for(int v = 0; v < VECT_DT_N; v++) {
-            DST_DATA_T dst_data = GET_ELEM(vect_dst_data, v);
+        unroll_for(int i = 0; i < n_inner_iters; i++) {
+            float f = finalize(
+                    REDUCTION_ALG, into_float(local_acc[i]), div, power, eps);
 #if ATOMIC_REDUCTION_SIZE > 1
-            DST_DATA_T old_val = atomic_accumulate(
-                    REDUCTION_ALG, &dst[v * subgroup_size], dst_data);
+            const DST_DATA_T old_val
+                    = atomic_accumulate(SECONDARY_REDUCTION_ALG,
+                            &dst[v * subgroup_size], TO_DST(f));
 #else
-            dst[v * subgroup_size] = dst_data;
+            dst[i * subgroup_size] = CONCAT2(into_, DST_DATA_T)(f);
 #endif
         }
     }

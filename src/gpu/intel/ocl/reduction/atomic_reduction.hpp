@@ -59,8 +59,6 @@ struct atomic_reduction_key_params_t
     int32_t threads_per_eu;
     int32_t subgroup_size;
     int32_t vect_size;
-    int32_t full_unroll_factor;
-    int32_t tail_unroll_factor;
     int32_t global_acc;
     dim_t local_acc;
 

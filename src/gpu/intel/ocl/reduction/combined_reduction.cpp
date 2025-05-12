@@ -421,6 +421,9 @@ static status_t init_kernel_ctx_common(compute::kernel_ctx_t &kernel_ctx,
         default: return status::invalid_arguments;
     }
 
+    if (gpu_utils::dev_getenv("ocl_debug", false))
+        kernel_ctx.add_option("-cl-std=CL2.0");
+
     // Def zero-padding variables
     kernel_ctx.define_int(
             "NUM_SRC_ZPAD", static_cast<int64_t>(phase.src_zpads.size()));

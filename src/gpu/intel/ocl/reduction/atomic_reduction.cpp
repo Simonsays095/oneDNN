@@ -22,6 +22,7 @@
 #include "common/utils.hpp"
 #include "gpu/intel/block_structure.hpp"
 #include "gpu/intel/compute/compute_engine.hpp"
+#include "gpu/intel/compute/data_type_converter.hpp"
 #include "gpu/intel/compute/device_info.hpp"
 #include "gpu/intel/compute/dispatch_reusable.hpp"
 #include "gpu/intel/compute/kernel_ctx.hpp"
@@ -85,7 +86,7 @@ private:
 // outer is left unchanged
 namespace reduction_dims {
 dim_idx_t subgroup = 0;
-// implicit vector = 1
+dim_idx_t vector = 1;
 dim_idx_t inner_group = 2;
 dim_idx_t global = 3;
 dim_idx_t local = 4;
@@ -160,22 +161,16 @@ atomic_reduction_conf_t::atomic_reduction_conf_t(
     conf.secondary_alg = secondary_alg;
 
     // Increase vector size to increase block size, without reducing saturation
-    bool is_pre_xe_hp = arch < compute::gpu_arch_t::xe_hp;
-    const int max_load_size = is_pre_xe_hp ? 128 : 256;
     conf.vect_size = 1;
-    for (auto vec : {8, 4, 2}) {
-        const dim_t num_sg = conf.local_acc * conf.global_acc * wg_per_inner
-                / vec * outer_block.block;
-        // Don't unsaturate
-        if (num_sg < target_subgroups) continue;
+    int32_t max_vec = into<int32_t>(
+            inner_block.block / into<dim_t>(conf.subgroup_size));
+    for (int32_t vec = max_vec; vec > 0; vec--) {
 
         // vec * subgroup_size has to divide inner_block.block
-        if (inner_block.block % (vec * conf.subgroup_size) != 0) continue;
-
-        // Limit maximum vector size based on max load size
-        if (vec * conf.subgroup_size
-                        * into<int>(types::data_type_size(src_type))
-                > max_load_size) {
+        // XXX: Won't always be a requirement :)
+        if (inner_block.block % (vec * conf.subgroup_size) != 0) {
+            std::cout << vec << "*" << conf.subgroup_size << "does not divide "
+                      << inner_block.block << std::endl;
             continue;
         }
 
@@ -184,37 +179,6 @@ atomic_reduction_conf_t::atomic_reduction_conf_t(
         wg_per_inner /= vec;
         break;
     }
-
-    // Compute the unroll factor to minimize read-accumulate iters
-    const auto &compute_unroll = [](dim_t loop_size) {
-        const int max_unroll = 128;
-        int unroll;
-        if (max_unroll > loop_size) {
-            // XXX: This encodes the reduction loop size directly into the kernel,
-            // which limits reusability for these cases (small reduction sizes) in
-            // exchange for fast execution time.
-            unroll = into<int>(loop_size);
-        } else {
-            int min_iters = std::numeric_limits<int>::max();
-            for (int u = max_unroll; u > 0; u--) {
-                const int unroll_iters = into<int>(loop_size / u);
-                const int extra_iters = loop_size % u;
-                const int total_iters = unroll_iters + extra_iters;
-
-                if (total_iters < min_iters) {
-                    unroll = u;
-                    min_iters = total_iters;
-                }
-            }
-        }
-        return unroll;
-    };
-    const int full_loop_size = into<int>(utils::div_up(
-            reduction_block.block, conf.global_acc * conf.local_acc));
-    const int tail_loop_size = into<int>(
-            reduction_block.block / (conf.global_acc * conf.local_acc));
-    conf.full_unroll_factor = compute_unroll(full_loop_size);
-    conf.tail_unroll_factor = compute_unroll(tail_loop_size);
 }
 
 status_t atomic_reduction_conf_t::init_dispatcher(
@@ -227,22 +191,25 @@ status_t atomic_reduction_conf_t::init_dispatcher(
             reduction_dims::inner_group,
             reduction_dims::subgroup,
     };
-    const std::vector<dim_idx_t> all_dims = {
+    const std::array<dim_idx_t, 7> all_dims = {
             reduction_dims::outer,
             reduction_dims::loop,
             reduction_dims::local,
             reduction_dims::global,
             reduction_dims::inner_group,
+            reduction_dims::vector,
             reduction_dims::subgroup,
     };
     compute::named_buffer_t src("SRC");
-    std::array<dim_t, 6> sizes = {
+    dim_t wi_reductions = utils::div_up(
+            reduction_block.block, conf.global_acc * conf.local_acc);
+    std::array<dim_t, 7> sizes = {
             outer_block.block,
             conf.global_acc,
             conf.local_acc,
-            utils::div_up(reduction_block.block,
-                    conf.global_acc * conf.local_acc), // not dispatched
-            inner_block.block / conf.vect_size / conf.subgroup_size,
+            wi_reductions, // not dispatched
+            inner_block.block / (conf.vect_size * conf.subgroup_size),
+            conf.vect_size, // not dispatched
             conf.subgroup_size,
     };
     for (size_t dim_idx = 0; dim_idx < all_dims.size(); dim_idx++) {
@@ -251,8 +218,7 @@ status_t atomic_reduction_conf_t::init_dispatcher(
     // the loop dim may have padding - update the outer block's stride to avoid it
     dim_idx_t src_outer_idx = src.get_dim_idx(reduction_dims::outer);
     gpu_assert(src_outer_idx != dim_idx::invalid);
-    src.format_desc.blocking.strides[src_outer_idx]
-            = outer_block.stride / conf.vect_size;
+    src.format_desc.blocking.strides[src_outer_idx] = outer_block.stride;
 
     compute::named_buffer_t dst("DST", src);
     dst.remove_dim(reduction_dims::loop);
@@ -266,8 +232,7 @@ status_t atomic_reduction_conf_t::init_dispatcher(
     // Once again, loop dim padding causes issues
     dim_idx_t dst_outer_idx = dst.get_dim_idx(reduction_dims::outer);
     gpu_assert(dst_outer_idx != dim_idx::invalid);
-    dst.format_desc.blocking.strides[dst_outer_idx]
-            = inner_block.block / conf.vect_size;
+    dst.format_desc.blocking.strides[dst_outer_idx] = inner_block.block;
 
     // Create the dispatcher
     compute::reusable_dispatch_config_t config(
@@ -474,13 +439,16 @@ static void init_kernel_ctx_common(compute::kernel_ctx_t &kernel_ctx,
     kernel_ctx.define_int("ATOMIC_REDUCTION_SIZE", conf.global_acc);
     // End stride vars
 
-    kernel_ctx.define_int("FULL_UNROLL_FACTOR", conf.full_unroll_factor);
-    kernel_ctx.define_int("TAIL_UNROLL_FACTOR", conf.tail_unroll_factor);
-
     // To use atomic_global_add
     kernel_ctx.add_option("-cl-std=CL2.0");
 
-    kernel_ctx.define_int("VECT_DT_N", conf.vect_size);
+    compute::data_type_converter_t converter;
+    data_type_t acc_dt
+            = types::default_accum_data_type(conf.src_type, data_type::f32);
+    converter.register_type("ACC", acc_dt);
+    converter.def_kernel_macros(kernel_ctx);
+
+    kernel_ctx.define_int("I_TILE_SIZE", conf.vect_size * conf.subgroup_size);
 
     def_reduction_alg_kinds(kernel_ctx);
     kernel_ctx.define_int("REDUCTION_ALG", to_int(conf.alg));
