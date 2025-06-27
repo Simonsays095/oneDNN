@@ -104,3 +104,12 @@
 --attr-fpmath=bf16:true
 7x6x32:7x32x64
 7x6x32:1x32x64
+
+# bf16:fp8:bf16/f32
+# common/per_oc wei scale (bf16/f32)
+--reset
+--dt=bf16:f8_e4m3:f32,bf16:f8_e5m2:f32,bf16:f8_e4m3:bf16,bf16:f8_e5m2:bf16
+--stag=ab --wtag=ab,ba --dtag=ab
+--attr-scales=wei:per_oc:bf16,wei:common:2:bf16,wei:per_oc:f32,wei:common:2:f32
+2x256:256x128n"DLRM:2*1"
+2x256:256x2n"DLRM:7*1"
