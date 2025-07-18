@@ -33,6 +33,16 @@ namespace jit {
 
 using namespace gemmstone;
 
+namespace {
+void entryObserver(
+        const kcatalog::Entry *entry, double score, EvaluateAuxOutput aux) {
+    if (get_verbose(verbose_t::debuginfo) >= 5) {
+        dnnl::impl::verbose_printf("info,gpu,gemm,consider:%s,score:%f\n",
+                entry->str().c_str(), score);
+    }
+};
+} // anonymous namespace
+
 status_t gen_gemm_kernel_desc_t::create_generator(
         const compute::compute_engine_t &engine,
         compute::kernel_t &kernel) const {
@@ -607,8 +617,9 @@ status_t gen_gemm_nocopy_kernel_desc_t::select_kernel(compute::gpu_arch_t arch,
     eval_params.batch = (batch_dims > 0);
     eval_params.deterministic = (mode & mode_deterministic);
 
+    std::function observer = entryObserver;
     entry_ = select(catalog(), static_cast<int>(match_params.size()),
-            match_params.data(), eval_params, aux_params_);
+            match_params.data(), eval_params, aux_params_, &observer);
 
     if (!entry_) return status::unimplemented;
 
@@ -752,7 +763,9 @@ status_t gen_gemm_xe_systolic_kernel_desc_t::select_kernel(
     eval_params.cConvert = (acc_type != c_type);
     eval_params.batch = (batch_dims > 0);
 
-    entry_ = select(catalog(), match_params, eval_params, aux_params_);
+    std::function observer = entryObserver;
+    entry_ = select(
+            catalog(), match_params, eval_params, aux_params_, &observer);
 
     if (!entry_) return status::unimplemented;
 
