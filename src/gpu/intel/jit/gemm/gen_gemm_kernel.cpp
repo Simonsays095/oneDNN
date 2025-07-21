@@ -306,8 +306,7 @@ void gen_gemm_kernel_desc_t::update_driver_info() {
 #undef ARCH_DISPATCH
 }
 
-status_t gen_gemm_kernel_desc_t::transfer_post_ops(
-        gpu_post_ops_t &&post_ops_, bool swap_ab) {
+status_t gen_gemm_kernel_desc_t::transfer_post_ops(gpu_post_ops_t &&post_ops_) {
     problem_.postOps = std::move(post_ops_);
     const auto &post_ops = problem_.postOps;
 
@@ -343,11 +342,6 @@ status_t gen_gemm_kernel_desc_t::transfer_post_ops(
 
             bool trans = is_multi_row && !src_rmd.inner_dim.is_innermost();
 
-            if (swap_ab) {
-                trans = !trans;
-                std::swap(is_multi_row, is_multi_col);
-            }
-
             problem_.Tbinary.push_back(T);
             problem_.postOps.binaryRow[i] = is_multi_row;
             problem_.postOps.binaryCol[i] = is_multi_col;
@@ -370,9 +364,9 @@ status_t gen_gemm_kernel_desc_t::transfer_post_ops(
 status_t gen_gemm_nocopy_kernel_desc_t::select_kernel(compute::gpu_arch_t arch,
         int stepping, int eu_count, bool has_systolic, bool is_integrated,
         compute_mode mode, int batch_dims, bool trans_a, bool trans_b,
-        bool trans_co, bool swap_ab, int ao_dims, int bo_dims, int asc_dims,
-        int bsc_dims, bool dst_sround, int a_q2d_group_k, int b_q2d_group_k,
-        bool c_offset, bool bias, sum_ab_t reduce_ab, float alpha, float beta,
+        bool trans_co, int ao_dims, int bo_dims, int asc_dims, int bsc_dims,
+        bool dst_sround, int a_q2d_group_k, int b_q2d_group_k, bool c_offset,
+        bool bias, sum_ab_t reduce_ab, float alpha, float beta,
         data_type_t a_type, data_type_t b_type, data_type_t c_type,
         data_type_t ao_type, data_type_t bo_type, data_type_t a_scales_type,
         data_type_t b_scales_type, data_type_t co_type, data_type_t acc_type,
@@ -447,38 +441,21 @@ status_t gen_gemm_nocopy_kernel_desc_t::select_kernel(compute::gpu_arch_t arch,
         problem_.AO.setAlignment(int(types::data_type_size(ao_type)));
     if (bo_type != data_type::undef)
         problem_.BO.setAlignment(int(types::data_type_size(bo_type)));
-    if (!swap_ab) {
-        problem_.asPtrDims = asc_dims;
-        problem_.bsPtrDims = bsc_dims;
-        problem_.aqGroupK = a_q2d_group_k;
-        problem_.bqGroupK = b_q2d_group_k;
-        if (a_scales_type != data_type::undef) {
-            problem_.Ta_scale = convert_dnnl_to_kernel_type(a_scales_type);
-            problem_.A_scale.setAlignment(
-                    int(types::data_type_size(a_scales_type)));
-        }
-        if (b_scales_type != data_type::undef) {
-            problem_.Tb_scale = convert_dnnl_to_kernel_type(b_scales_type);
-            problem_.B_scale.layout = MatrixLayout::N;
-            problem_.B_scale.setAlignment(
-                    int(types::data_type_size(b_scales_type)));
-        }
-    } else {
-        problem_.bsPtrDims = asc_dims;
-        problem_.asPtrDims = bsc_dims;
-        problem_.bqGroupK = a_q2d_group_k;
-        problem_.aqGroupK = b_q2d_group_k;
-        if (a_scales_type != data_type::undef) {
-            problem_.Tb_scale = convert_dnnl_to_kernel_type(a_scales_type);
-            problem_.B_scale.setAlignment(
-                    int(types::data_type_size(a_scales_type)));
-        }
-        if (b_scales_type != data_type::undef) {
-            problem_.Ta_scale = convert_dnnl_to_kernel_type(b_scales_type);
-            problem_.A_scale.layout = MatrixLayout::T;
-            problem_.A_scale.setAlignment(
-                    int(types::data_type_size(b_scales_type)));
-        }
+
+    problem_.asPtrDims = asc_dims;
+    problem_.bsPtrDims = bsc_dims;
+    problem_.aqGroupK = a_q2d_group_k;
+    problem_.bqGroupK = b_q2d_group_k;
+    if (a_scales_type != data_type::undef) {
+        problem_.Ta_scale = convert_dnnl_to_kernel_type(a_scales_type);
+        problem_.A_scale.setAlignment(
+                int(types::data_type_size(a_scales_type)));
+    }
+    if (b_scales_type != data_type::undef) {
+        problem_.Tb_scale = convert_dnnl_to_kernel_type(b_scales_type);
+        problem_.B_scale.layout = MatrixLayout::N;
+        problem_.B_scale.setAlignment(
+                int(types::data_type_size(b_scales_type)));
     }
 
     if (problem_.Ta_ext.isInt4() && problem_.Tb_ext.isInt8() && ao_dims >= 0)
@@ -491,7 +468,7 @@ status_t gen_gemm_nocopy_kernel_desc_t::select_kernel(compute::gpu_arch_t arch,
     if (alpha == 1.0f) problem_.alpha = alpha;
     if (beta == 0.0f || beta == 1.0f) problem_.beta = beta;
 
-    auto status = transfer_post_ops(std::move(post_ops), swap_ab);
+    auto status = transfer_post_ops(std::move(post_ops));
     if (status != status::success) return status;
 
     if (c_offset || bias || reduce_ab != sum_ab::sum_none) {
@@ -618,10 +595,16 @@ status_t gen_gemm_nocopy_kernel_desc_t::select_kernel(compute::gpu_arch_t arch,
     eval_params.deterministic = (mode & mode_deterministic);
 
     std::function observer = entryObserver;
-    entry_ = select(catalog(), static_cast<int>(match_params.size()),
-            match_params.data(), eval_params, aux_params_, &observer);
+    bool allow_swap = gpu_utils::dev_getenv("ALLOW_AB_SWAP", true);
+    auto selected = select(catalog(), static_cast<int>(match_params.size()),
+            match_params.data(), eval_params, aux_params_, allow_swap,
+            &observer);
+    entry_ = selected.entry;
+    swap_ab_ = selected.isSwapped;
 
     if (!entry_) return status::unimplemented;
+
+    if (swap_ab_) problem_.transpose();
 
     // Update A/B/C types from entry.
     Type Ta_new, Ta_ext_new, Tb_new, Tb_ext_new, Tc_new, Tc_ext_new;
@@ -720,7 +703,7 @@ status_t gen_gemm_xe_systolic_kernel_desc_t::select_kernel(
     if (alpha == 1.0f) problem_.alpha = alpha;
     if (beta == 0.0f || beta == 1.0f) problem_.beta = beta;
 
-    auto status = transfer_post_ops(std::move(post_ops), false);
+    auto status = transfer_post_ops(std::move(post_ops));
     if (status != status::success) return status;
 
     if (c_offset) problem_.cOffset = COffset::Post;
@@ -767,8 +750,10 @@ status_t gen_gemm_xe_systolic_kernel_desc_t::select_kernel(
     eval_params.batch = (batch_dims > 0);
 
     std::function observer = entryObserver;
-    entry_ = select(
-            catalog(), match_params, eval_params, aux_params_, &observer);
+    bool allow_swap = gpu_utils::dev_getenv("ALLOW_AB_SWAP", true);
+    entry_ = select(catalog(), match_params, eval_params, aux_params_,
+            allow_swap, &observer)
+                     .entry;
 
     if (!entry_) return status::unimplemented;
 

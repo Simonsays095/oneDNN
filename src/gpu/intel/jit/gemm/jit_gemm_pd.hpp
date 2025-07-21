@@ -22,7 +22,9 @@
 #include "common/c_types_map.hpp"
 #include "common/tag_traits.hpp"
 #include "gpu/gpu_gemm_pd.hpp"
+#include "gpu/intel/gemm/gpu_gemm_exec_types.hpp"
 #include "gpu/intel/gpu_post_ops.hpp"
+#include "gpu/intel/utils.hpp"
 
 namespace dnnl {
 namespace impl {
@@ -102,9 +104,9 @@ struct jit_gemm_pd_t : public gpu_gemm_pd_t {
 
     const int idx_a = DNNL_ARG_WEIGHTS;
     memory_desc_t prelu_wei_md;
-    bool swap_ab_ = false;
-    dim_t eff_lda_ = 0, eff_ldb_ = 0;
-    bool eff_transa_ = false, eff_transb_ = false;
+    // Cached leading dimensions - we add padding in gemv cases
+    dim_t lda_ = 0, ldb_ = 0;
+    bool transa_ = false, transb_ = false;
     bool with_sround_ = false;
 
     float alpha() const { return 1.0f; }
@@ -122,13 +124,6 @@ struct jit_gemm_pd_t : public gpu_gemm_pd_t {
     }
 
     sum_ab_t sum_ab() const { return desc()->sum_ab; }
-    sum_ab_t eff_sum_ab() const {
-        if (swap_ab() && sum_ab() == sum_ab::sum_a_row)
-            return sum_ab::sum_b_col;
-        if (swap_ab() && sum_ab() == sum_ab::sum_b_col)
-            return sum_ab::sum_a_row;
-        return sum_ab();
-    }
 
     bool a_zp_2d() const { return ao_dims_ == 2; }
     bool b_zp_2d() const { return bo_dims_ == 2; }
@@ -136,7 +131,7 @@ struct jit_gemm_pd_t : public gpu_gemm_pd_t {
     bool with_sum_ab() const { return sum_ab() != sum_ab::sum_none; }
 
     int sum_ab_cmask() const {
-        switch (eff_sum_ab()) {
+        switch (sum_ab()) {
             default:
             case sum_ab::sum_none: return 0;
             case sum_ab::sum_a_row: return 1;
@@ -163,61 +158,30 @@ struct jit_gemm_pd_t : public gpu_gemm_pd_t {
     bool wei_decomp();
     bool quant_enabled();
 
-    bool swap_ab() const { return swap_ab_; }
-
     int batch_dims() const { return nstl::max(desc()->c_desc.ndims - 2, 0); }
-    bool eff_transa() const { return eff_transa_; }
-    bool eff_transb() const { return eff_transb_; }
-    bool eff_trans_bias() const {
-        return swap_ab() ? (desc()->trans_bias() == dnnl_notrans)
-                         : (desc()->trans_bias() == dnnl_trans);
-    }
-    dim_t eff_m() const { return !swap_ab() ? desc()->m() : desc()->n(); }
-    dim_t eff_n() const { return !swap_ab() ? desc()->n() : desc()->m(); }
-    dim_t eff_lda() const { return eff_lda_; }
-    dim_t eff_ldb() const { return eff_ldb_; }
-    dim_t eff_stride_a(int dim) const {
-        return !swap_ab() ? desc()->stride_a(dim) : desc()->stride_b(dim);
-    }
-    dim_t eff_stride_b(int dim) const {
-        return !swap_ab() ? desc()->stride_b(dim) : desc()->stride_a(dim);
-    }
-    data_type_t eff_a_type() const {
-        return !swap_ab() ? desc()->a_type() : desc()->b_type();
-    }
-    data_type_t eff_b_type() const {
-        return !swap_ab() ? desc()->b_type() : desc()->a_type();
-    }
-    int eff_align_a() const {
-        auto dt = eff_a_type();
-        auto align
-                = utils::max_pow2_div(types::elements_to_bytes(dt, eff_lda()));
-        for (int b = 0; b < batch_dims(); b++) {
-            auto stride_bytes = utils::max_pow2_div(
-                    types::elements_to_bytes(dt, eff_stride_a(b)));
-            align = (stride_bytes ? nstl::min(align, stride_bytes) : align);
-        }
-        return int(align);
-    }
-    int eff_align_b() const {
-        auto dt = eff_b_type();
-        auto align
-                = utils::max_pow2_div(types::elements_to_bytes(dt, eff_ldb()));
-        for (int b = 0; b < batch_dims(); b++) {
-            auto stride_bytes = utils::max_pow2_div(
-                    types::elements_to_bytes(dt, eff_stride_b(b)));
-            align = (stride_bytes ? nstl::min(align, stride_bytes) : align);
-        }
-        return int(align);
-    }
+    int align_a() const { return align_dt(desc_.a_type(), lda_, DNNL_ARG_A); }
+    int align_b() const { return align_dt(desc_.b_type(), ldb_, DNNL_ARG_B); }
     int align_c() const {
-        auto dt = desc()->c_type();
-        auto align = utils::max_pow2_div(
-                types::elements_to_bytes(dt, desc()->ldc()));
+        return align_dt(desc_.c_type(), desc_.ldc(), DNNL_ARG_C);
+    }
+
+    dim_t stride(int arg, int dim = 0) const {
+        switch (arg) {
+            case (DNNL_ARG_A): return desc()->stride_a(dim);
+            case (DNNL_ARG_B): return desc()->stride_b(dim);
+            case (DNNL_ARG_C): return desc()->stride_c(dim);
+        }
+        gpu_error_not_expected();
+        return 0;
+    }
+
+protected:
+    int align_dt(data_type_t dt, dim_t ld, int arg) const {
+        auto align = utils::max_pow2_div(types::elements_to_bytes(dt, ld));
         for (int b = 0; b < batch_dims(); b++)
             align = nstl::min(align,
                     utils::max_pow2_div(
-                            types::elements_to_bytes(dt, desc()->stride_c(b))));
+                            types::elements_to_bytes(dt, stride(arg, b))));
         return int(align);
     }
 };

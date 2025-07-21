@@ -46,8 +46,8 @@ dim_t quant_entry_group_prod(const quant_entry_t &attr) {
 
 status_t gen_gemm_t::launch_nocopy(const gemm_exec_ctx_t &ctx,
         compute::compute_stream_t *compute_stream, zero_pool_t *zero_pool,
-        const memory_storage_t &a, const memory_storage_t &b,
-        const memory_storage_t &c, const memory_storage_t *ao,
+        const memory_storage_t *a, const memory_storage_t *b,
+        const memory_storage_t *c, const memory_storage_t *ao,
         const memory_storage_t *bo, const memory_storage_t *a_scales,
         const memory_storage_t *b_scales, const memory_storage_t &co,
         const memory_storage_t *c_temp, const memory_storage_t *sround_seed,
@@ -56,8 +56,28 @@ status_t gen_gemm_t::launch_nocopy(const gemm_exec_ctx_t &ctx,
         int64_t offset_bq, int64_t offset_co, int64_t *offset_po_src,
         int32_t lda, int32_t ldb, int32_t ldc, int32_t m, int32_t n, int32_t k,
         int32_t k0, float alpha, float beta, int32_t cmask, bool last_k_block,
-        bool swapab, bool disable_hilbert) const {
+        bool disable_hilbert) const {
     if (pd()->desc()->batch() == 0) return status::success;
+
+    int arg_A = DNNL_ARG_A;
+    int arg_B = DNNL_ARG_B;
+    int arg_C = DNNL_ARG_C;
+    if (pd()->kernel_desc()->swapab()) {
+        // Swap arguments
+        std::swap(a, b);
+        std::swap(ao, bo);
+        std::swap(a_scales, b_scales);
+        std::swap(offset_a, offset_b);
+        std::swap(offset_aq, offset_bq);
+        std::swap(lda, ldb);
+        std::swap(m, n);
+
+        uint8_t swap_table[4] = {0, 2, 1, 3};
+        cmask = (cmask & ~3) | swap_table[cmask & 3];
+
+        // Swap args for use instead of DNNL_ARG_{AB} later
+        std::swap(arg_A, arg_B);
+    }
 
     uint32_t flags = 0;
     bool k_parallel_fixed
@@ -73,9 +93,9 @@ status_t gen_gemm_t::launch_nocopy(const gemm_exec_ctx_t &ctx,
     compute::kernel_arg_list_t arg_list;
     int argn = 0;
 
-    arg_list.set(argn++, a);
-    arg_list.set(argn++, b);
-    arg_list.set(argn++, c);
+    arg_list.set(argn++, *a);
+    arg_list.set(argn++, *b);
+    arg_list.set(argn++, *c);
     arg_list.set(argn++, offset_a);
     arg_list.set(argn++, offset_b);
     arg_list.set(argn++, offset_c);
@@ -97,7 +117,7 @@ status_t gen_gemm_t::launch_nocopy(const gemm_exec_ctx_t &ctx,
         auto layout = problem->aScale2D() ? problem->A_scale.layout
                                           : problem->AO.layout;
         int32_t ldaq = isColMajor(layout)
-                ? pd()->eff_m()
+                ? m
                 : utils::div_up(pd()->desc()->k(), problem->aqGroupK);
         arg_list.set(argn++, ldaq);
     }
@@ -105,7 +125,7 @@ status_t gen_gemm_t::launch_nocopy(const gemm_exec_ctx_t &ctx,
         auto layout = problem->bScale2D() ? problem->B_scale.layout
                                           : problem->BO.layout;
         int32_t ldbq = !isColMajor(layout)
-                ? pd()->eff_n()
+                ? n
                 : utils::div_up(pd()->desc()->k(), problem->bqGroupK);
         arg_list.set(argn++, ldbq);
     }
@@ -144,12 +164,9 @@ status_t gen_gemm_t::launch_nocopy(const gemm_exec_ctx_t &ctx,
 
     if (pd()->batch_dims() >= 1) {
         for (int i = pd()->batch_dims() - 1; i >= 0; i--) {
-            auto stride_a = int32_t(pd()->eff_stride_a(i));
-            auto stride_b = int32_t(pd()->eff_stride_b(i));
-            auto stride_c = int32_t(pd()->desc()->stride_c(i));
-            arg_list.set(argn++, stride_a);
-            arg_list.set(argn++, stride_b);
-            arg_list.set(argn++, stride_c);
+            arg_list.set(argn++, into<int32_t>(pd()->stride(arg_A, i)));
+            arg_list.set(argn++, into<int32_t>(pd()->stride(arg_B, i)));
+            arg_list.set(argn++, into<int32_t>(pd()->stride(arg_C, i)));
             if (problem->asPtrDims > 2) {
                 dim_t scale_stride = pd()->stride_scale(i, DNNL_ARG_A);
                 auto scale_stride_a = int32_t(scale_stride
@@ -276,21 +293,19 @@ status_t gen_gemm_t::execute(const gemm_exec_ctx_t &ctx) const {
     const auto d = pd()->desc();
     const auto &problem = *pd()->kernel_desc()->problem();
 
-    const bool swapab = pd()->swap_ab();
-
-    auto a_type = pd()->eff_a_type();
-    auto b_type = pd()->eff_b_type();
+    auto a_type = d->a_type();
+    auto b_type = d->b_type();
     auto c_type = d->c_type();
 
-    const auto m = pd()->eff_m();
-    const auto n = pd()->eff_n();
+    const auto m = d->m();
+    const auto n = d->n();
     auto k = d->k();
 
-    const bool transa = pd()->eff_transa();
-    const bool transb = pd()->eff_transb();
+    const bool transa = pd()->transa_;
+    const bool transb = pd()->transb_;
 
-    const auto lda = pd()->eff_lda();
-    const auto ldb = pd()->eff_ldb();
+    const auto lda = pd()->lda_;
+    const auto ldb = pd()->ldb_;
     auto ldc = d->ldc();
     auto ldco = pd()->with_bias() ? d->ld_bias() : 0;
 
@@ -302,8 +317,10 @@ status_t gen_gemm_t::execute(const gemm_exec_ctx_t &ctx) const {
             = (nocopy_info()->kParallel() || nocopy_info()->kParallelLocal())
             && !nocopy_info()->kParallelVariable();
 
-    auto &a = swapab ? GEMM_CTX_ARG_STORAGE(a) : GEMM_CTX_ARG_STORAGE(b);
-    auto &b = swapab ? GEMM_CTX_ARG_STORAGE(b) : GEMM_CTX_ARG_STORAGE(a);
+    // swapped since GEMM_CTX_ARG_STORAGE uses row-major definition of
+    // A/B, and we use column-major definition plus transposition
+    auto &a = GEMM_CTX_ARG_STORAGE(b);
+    auto &b = GEMM_CTX_ARG_STORAGE(a);
     auto &c = GEMM_CTX_ARG_STORAGE(c);
     auto &c_zp = GEMM_CTX_ARG_STORAGE(c_zero_point);
     auto &bias = GEMM_CTX_ARG_STORAGE(bias);
@@ -396,18 +413,10 @@ status_t gen_gemm_t::execute(const gemm_exec_ctx_t &ctx) const {
     if (pd()->with_a_zero_points() || pd()->with_b_zero_points()) {
         ao = &GEMM_CTX_ARG_STORAGE(a_zero_point);
         bo = &GEMM_CTX_ARG_STORAGE(b_zero_point);
-        if (swapab) std::swap(ao, bo);
     }
 
     if (pd()->a_scales_2d()) { a_scales = &GEMM_CTX_ARG_STORAGE(a_scales); }
-
     if (pd()->b_scales_2d()) { b_scales = &GEMM_CTX_ARG_STORAGE(b_scales); }
-    if (swapab) std::swap(a_scales, b_scales);
-
-    if (swapab) {
-        uint8_t swap_table[4] = {0, 2, 1, 3};
-        cmask = (cmask & ~3) | swap_table[cmask & 3];
-    }
 
     status_t status;
 
@@ -439,11 +448,11 @@ status_t gen_gemm_t::execute(const gemm_exec_ctx_t &ctx) const {
 
         if (k_parallel_global && !nocopy_info()->fusedBeta() && beta != 1.0f
                 && (k > dim_t(k0) * pd()->kernel_desc()->aux_params()->wgK)) {
-            status = launch_nocopy(ctx, compute_stream, zero_pool, a, b, c, ao,
-                    bo, a_scales, b_scales, *co, nullptr, sround_seed, po_count,
-                    po_srcs, off_a0, off_b0, off_c0, off_aq0, off_bq0, off_co0,
-                    po_offsets0, lda, ldb, ldc, m, n, 0, 1, 1.0f, beta, 0,
-                    false, swapab, true);
+            status = launch_nocopy(ctx, compute_stream, zero_pool, &a, &b, &c,
+                    ao, bo, a_scales, b_scales, *co, nullptr, sround_seed,
+                    po_count, po_srcs, off_a0, off_b0, off_c0, off_aq0, off_bq0,
+                    off_co0, po_offsets0, lda, ldb, ldc, m, n, 0, 1, 1.0f, beta,
+                    0, false, true);
             if (status) return status;
             beta = 1.0f;
         }
@@ -502,12 +511,12 @@ status_t gen_gemm_t::execute(const gemm_exec_ctx_t &ctx) const {
                 }
 
                 float eff_beta = (Bk == 0) ? beta : 1.0f;
-                status = launch_nocopy(ctx, compute_stream, zero_pool, a, b, c,
-                        ao, bo, a_scales, b_scales, *co, c_temp.get(),
+                status = launch_nocopy(ctx, compute_stream, zero_pool, &a, &b,
+                        &c, ao, bo, a_scales, b_scales, *co, c_temp.get(),
                         sround_seed, po_count, po_srcs, off_a_src, off_b_src,
                         off_c, off_aq, off_bq, off_co, po_offsets, lda, ldb,
                         ldc, size_m, size_n, size_k, k0, alpha, eff_beta, cmask,
-                        last_k_block, swapab, disable_hilbert);
+                        last_k_block, disable_hilbert);
 
                 if (status) return status;
             }

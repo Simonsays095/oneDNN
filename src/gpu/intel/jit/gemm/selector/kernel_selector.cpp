@@ -156,69 +156,94 @@ bool lessAligned(int alignA1, int alignB1, int alignA2, int alignB2)
 
 // Inner kernel selection logic.
 // Choose the best entry, if any, matching one of the given patterns.
-const kcatalog::Entry *select1(const kcatalog::Catalog &catalog, int npatterns, const MatchParams *patterns, const EvaluateParams &eparams, EvaluateAuxOutput &aux, SelectionObserver observer)
+SelectOutcome select1(const kcatalog::Catalog &catalog, int npatterns, const MatchParams *patterns, const EvaluateParams &eparams, EvaluateAuxOutput &aux, bool allow_transposition, SelectionObserver observer)
 {
     double bestScore = std::numeric_limits<double>::infinity();
     const kcatalog::Entry *bestEntry = nullptr;
-    int bestIPattern = -1;
+    const MatchParams *bestPattern = nullptr;
+    bool bestIsSwapped = false;
     bool bestIsFallback = false;
     int bestAlignA = 0, bestAlignB = 0;
 
+    // Create list of patterns after AB=C => B^T A^T = C^T transformation
+    std::vector<MatchParams> swappedPatterns;
+    if (allow_transposition) {
+        swappedPatterns.reserve(npatterns);
+        for (int ipattern = 0; ipattern < npatterns; ipattern++) {
+            swappedPatterns.emplace_back(patterns[ipattern].transpose());
+        }
+    }
+    auto swapped_eparams = eparams;
+    std::swap(swapped_eparams.sizes.m, swapped_eparams.sizes.n);
+
     // TODO: omit evaluation if only one match, if aux output not needed.
     for (int ipattern = 0; ipattern < npatterns; ipattern++) {
-        for (auto it = match(catalog, patterns[ipattern]); it; it++) {
+        auto judge_entry = [&](const kcatalog::Entry &entry) -> bool {
             EvaluateAuxOutput thisAux;
-
-            bool fallback = (it->restrictions.tags[0] == kcatalog::ReqAlignFallback);
-            int alignA = std::max(it->restrictions.alignment[0], 4);
-            int alignB = std::max(it->restrictions.alignment[1], 4);
+            bool fallback = (entry.restrictions.tags[0] == kcatalog::ReqAlignFallback);
+            int alignA = std::max(entry.restrictions.alignment[0], 4);
+            int alignB = std::max(entry.restrictions.alignment[1], 4);
 
             if (fallback && lessAligned(alignA, alignB, bestAlignA, bestAlignB))
-                continue;
+                return false;
 
-            double score = evaluate(*it, eparams, thisAux);
+            double score = evaluate(entry, eparams, thisAux);
 
             bool better = (score < bestScore)
                         | (bestIsFallback && lessAligned(bestAlignA, bestAlignB, alignA, alignB));
 
             if (better) {
-                bestEntry = &*it;
+                bestEntry = &entry;
                 bestScore = score;
-                bestIPattern = ipattern;
                 bestAlignA = alignA;
                 bestAlignB = alignB;
                 bestIsFallback = fallback;
                 aux = thisAux;
             }
 
-            if (observer) (*observer)(&*it, score, aux);
+            if (observer) (*observer)(&entry, score, aux);
+
+            return better;
+        };
+        for (auto it = match(catalog, patterns[ipattern]); it; it++) {
+            if (judge_entry(*it)) {
+                bestPattern = &patterns[ipattern];
+            }
+        }
+
+        // Also judge transposed entries
+        if (allow_transposition) for (auto it = match(catalog, swappedPatterns[ipattern]); it; it++) {
+            if (judge_entry(*it)) {
+                bestPattern = &swappedPatterns[ipattern];
+                bestIsSwapped = true;
+            }
         }
     }
 
     // Late tag checking. If late tags do not match, we abandon the kernel and
     //  force the calling code to take another path.
-    if (bestEntry && !tagMatch(bestEntry->restrictions.tags, patterns[bestIPattern].lateTags))
-        return nullptr;
+    if (bestEntry && !tagMatch(bestEntry->restrictions.tags, bestPattern->lateTags))
+        return {nullptr, false};
 
-    return bestEntry;
+    return {bestEntry, bestIsSwapped};
 }
 
 // User-facing kernel selection logic.
 // Includes architecture and data type fallbacks.
-const kcatalog::Entry *select(const kcatalog::Catalog &catalog, const MatchParams &pattern, const EvaluateParams &eparams, EvaluateAuxOutput &aux, SelectionObserver observer)
+SelectOutcome select(const kcatalog::Catalog &catalog, const MatchParams &pattern, const EvaluateParams &eparams, EvaluateAuxOutput &aux, bool allow_transposition, SelectionObserver observer)
 {
-    return select(catalog, 1, &pattern, eparams, aux, observer);
+    return select(catalog, 1, &pattern, eparams, aux, allow_transposition, observer);
 }
 
-const kcatalog::Entry *select(const kcatalog::Catalog &catalog, int npatterns, const MatchParams *patterns, const EvaluateParams &eparams, EvaluateAuxOutput &aux, SelectionObserver observer)
+SelectOutcome select(const kcatalog::Catalog &catalog, int npatterns, const MatchParams *patterns, const EvaluateParams &eparams, EvaluateAuxOutput &aux, bool allow_transposition, SelectionObserver observer)
 {
     using namespace kcatalog;
 
     if (npatterns == 0 || !patterns)
-        return nullptr;
+        return {nullptr, false};
 
-    auto result = select1(catalog, npatterns, patterns, eparams, aux, observer);
-    if (result) return result;
+    auto result = select1(catalog, npatterns, patterns, eparams, aux, allow_transposition, observer);
+    if (result.entry) return result;
 
     // Architecture fallback loop.
     bool first = true;
@@ -234,8 +259,8 @@ const kcatalog::Entry *select(const kcatalog::Catalog &catalog, int npatterns, c
         // Type fallback loop.
         while (true) {
             if (!first) {
-                result = select1(catalog, npatterns, modPatterns.data(), eparams, aux, observer);
-                if (result) return result;
+                result = select1(catalog, npatterns, modPatterns.data(), eparams, aux, allow_transposition, observer);
+                if (result.entry) return result;
             }
             first = false;
 
@@ -356,8 +381,8 @@ MatchParamsBase::MatchParamsBase(ngen::HW hw, bool systolicAvailable, bool isInt
 
     selector.kernelType = "gemm";
 
-    makeABConvert(problem.Ta, problem.Ta_ext, precisions.A);
-    makeABConvert(problem.Tb, problem.Tb_ext, precisions.B);
+    makeABConvert(problem.Ta, problem.Ta_ext, &precisions.A[0]);
+    makeABConvert(problem.Tb, problem.Tb_ext, &precisions.B[0]);
     precisions.C[0] = precisionChar(problem.Tc);
     layouts.A[0] = layoutChar(problem.A.layout);
     layouts.B[0] = layoutChar(problem.B.layout);

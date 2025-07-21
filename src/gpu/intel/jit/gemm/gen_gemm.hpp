@@ -95,39 +95,18 @@ struct gen_gemm_t : public gpu_gemm_t {
             with_sround_ = attr()->rounding_mode_.get(DNNL_ARG_DST)
                     == rounding_mode::stochastic;
 
-            // If m = 1, swap A/B to use more efficient n = 1 kernels if possible.
-            eff_lda_ = d->lda();
-            eff_ldb_ = d->ldb();
-            eff_transa_ = d->transa() == dnnl_trans;
-            eff_transb_ = d->transb() == dnnl_trans;
-
-            bool check_lda = ((d->transa() == dnnl_notrans && d->lda() == 1)
-                    || (d->transa() == dnnl_trans));
-            swap_ab_ = (d->m() == 1 && d->ldc() == 1 && check_lda)
-                    || d->transc() == dnnl_trans;
-
-            if (swap_ab_) {
-                std::swap(eff_lda_, eff_ldb_);
-                std::swap(eff_transa_, eff_transb_);
-                eff_transa_ = !eff_transa_;
-                eff_transb_ = !eff_transb_;
-
-                // Do not use transposed B when it is unnecessary
-                if (eff_transb_ && eff_n() == 1) {
-                    eff_transb_ = false;
-                    eff_ldb_ = d->k();
-                }
-            }
+            lda_ = d->lda();
+            ldb_ = d->ldb();
+            transa_ = d->transa() == dnnl_trans;
+            transb_ = d->transb() == dnnl_trans;
 
             // Pad leading dimensions in case of a single row/column.
-            if ((d->k() == 1 && eff_transa() == dnnl_notrans)
-                    || (eff_m() == 1 && eff_transa() == dnnl_trans)) {
-                eff_lda_ = utils::rnd_up(eff_lda_, 16);
+            if ((transa_ ? d->m() : d->k()) == 1) {
+                lda_ = utils::rnd_up(lda_, 16);
             }
 
-            if ((eff_n() == 1 && eff_transb() == dnnl_notrans)
-                    || (d->k() == 1 && eff_transb() == dnnl_trans)) {
-                eff_ldb_ = utils::rnd_up(eff_ldb_, 16);
+            if ((transb_ ? d->k() : d->n()) == 1) {
+                ldb_ = utils::rnd_up(ldb_, 16);
             }
 
             // Check parameters.
@@ -214,9 +193,7 @@ struct gen_gemm_t : public gpu_gemm_t {
             VDISPATCH_GEMM(scales_ok(), VERBOSE_UNSUPPORTED_SCALES_CFG);
 
             if (!attr()->zero_points_.has_default_values()) {
-
                 VDISPATCH_GEMM(zp_ok(), VERBOSE_UNSUPPORTED_ZP_CFG);
-                if (swap_ab_) std::swap(ao_dims_, bo_dims_);
             }
 
             VDISPATCH_GEMM_SC(init_post_ops(), VERBOSE_UNSUPPORTED_POSTOP);
@@ -251,12 +228,12 @@ struct gen_gemm_t : public gpu_gemm_t {
 
             // Wrangle data types.
             auto ao_type = with_a_zero_points()
-                    ? attr_zps.get_data_type(swap_ab_ ? DNNL_ARG_B : DNNL_ARG_A)
+                    ? attr_zps.get_data_type(DNNL_ARG_A)
                     : data_type::s32;
             auto bo_type = with_b_zero_points()
-                    ? attr_zps.get_data_type(swap_ab_ ? DNNL_ARG_A : DNNL_ARG_B)
+                    ? attr_zps.get_data_type(DNNL_ARG_B)
                     : data_type::s32;
-            bool int_acc = utils::one_of(eff_a_type(), s8, u8);
+            bool int_acc = utils::one_of(d->a_type(), s8, u8);
             int_acc &= !a_scales_2d();
             auto co_type = with_bias() ? d->bias_type()
                     : with_sum_ab()    ? d->sum_ab_type
@@ -266,8 +243,8 @@ struct gen_gemm_t : public gpu_gemm_t {
             // Choose accumulation data type.
             auto acc_type = int_acc
                     ? s32
-                    : (utils::one_of(f64, eff_a_type(), eff_b_type()) ? f64
-                                                                      : f32);
+                    : (utils::one_of(f64, d->a_type(), d->b_type()) ? f64
+                                                                    : f32);
             VDISPATCH_GEMM(
                     IMPLICATION(acc_type == f64, !with_eltwise && !with_binary),
                     VERBOSE_UNSUPPORTED_POSTOP);
@@ -308,10 +285,10 @@ struct gen_gemm_t : public gpu_gemm_t {
 
             // GEMM kernels down convert the following parameters to
             // int/uint32_t
-            VDISPATCH_GEMM(std::max({eff_m(), eff_n(), d->k(), d->batch()})
+            VDISPATCH_GEMM(std::max({d->m(), d->n(), d->k(), d->batch()})
                             <= std::numeric_limits<int32_t>::max(),
                     VERBOSE_SHAPE_RESTRICTION);
-            VDISPATCH_GEMM(std::max({eff_lda(), eff_ldb(), d->ldc()})
+            VDISPATCH_GEMM(std::max({d->lda(), d->ldb(), d->ldc()})
                             <= std::numeric_limits<uint32_t>::max(),
                     VERBOSE_SHAPE_RESTRICTION);
 
@@ -320,19 +297,20 @@ struct gen_gemm_t : public gpu_gemm_t {
             CHECK(gpu_post_ops_t::make(gpu_post_ops, post_ops_, dst_md(),
                     get_post_op_specializations()));
 
+            bool trans_bias = desc()->trans_bias() == dnnl_trans;
             VDISPATCH_GEMM_SC(
                     kernel_desc_.select_kernel(arch_, stepping,
                             dev_info_->eu_count(), has_systolic, is_integrated,
-                            mode, batch_dims(), eff_transa(), eff_transb(),
-                            eff_trans_bias(), swap_ab(), ao_dims_, bo_dims_,
-                            asc_dims_, bsc_dims_, with_sround_, a_q2d_group_k_,
-                            b_q2d_group_k_, with_c_zero_points(), with_bias(),
-                            eff_sum_ab(), alpha(), beta(), eff_a_type(),
-                            eff_b_type(), desc()->c_type(), ao_type, bo_type,
-                            a_scales_type_, b_scales_type_, co_type, acc_type,
-                            eff_align_a(), eff_align_b(), align_c(), eff_m(),
-                            eff_n(), d->k(), eff_lda(), eff_ldb(), d->ldc(),
-                            d->batch(), std::move(gpu_post_ops)),
+                            mode, batch_dims(), transa_, transb_, trans_bias,
+                            ao_dims_, bo_dims_, asc_dims_, bsc_dims_,
+                            with_sround_, a_q2d_group_k_, b_q2d_group_k_,
+                            with_c_zero_points(), with_bias(), sum_ab(),
+                            alpha(), beta(), d->a_type(), d->b_type(),
+                            desc()->c_type(), ao_type, bo_type, a_scales_type_,
+                            b_scales_type_, co_type, acc_type, align_a(),
+                            align_b(), align_c(), d->m(), d->n(), d->k(), lda_,
+                            ldb_, d->ldc(), d->batch(),
+                            std::move(gpu_post_ops)),
                     VERBOSE_UNSUPPORTED_FEATURE,
                     "matching kernel not found in catalog");
 
@@ -585,8 +563,8 @@ struct gen_gemm_t : public gpu_gemm_t {
 private:
     status_t launch_nocopy(const gemm_exec_ctx_t &ctx,
             compute::compute_stream_t *s, zero_pool_t *zero_pool,
-            const memory_storage_t &a, const memory_storage_t &b,
-            const memory_storage_t &c, const memory_storage_t *ao,
+            const memory_storage_t *a, const memory_storage_t *b,
+            const memory_storage_t *c, const memory_storage_t *ao,
             const memory_storage_t *bo, const memory_storage_t *a_scales,
             const memory_storage_t *b_scales, const memory_storage_t &co,
             const memory_storage_t *c_temp, const memory_storage_t *sround_seed,
@@ -595,7 +573,7 @@ private:
             int64_t offset_bq, int64_t offset_co, int64_t *offset_po_src,
             int32_t lda, int32_t ldb, int32_t ldc, int32_t m, int32_t n,
             int32_t k, int32_t k0, float alpha, float beta, int32_t cmask,
-            bool last_k_block, bool swapab, bool disable_hilbert) const;
+            bool last_k_block, bool disable_hilbert) const;
 
     const pd_t *pd() const { return (const pd_t *)primitive_t::pd().get(); }
     const gemmstone::CommonDriverInfo *nocopy_info() const {

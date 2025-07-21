@@ -20,6 +20,8 @@
 #include "gemmstone/config.hpp"
 #include "gemmstone/kernel_catalog.hpp"
 #include "gemmstone/kernel_evaluator.hpp"
+#include "problem.hpp"
+#include "strategy_parser.hpp"
 
 #include <algorithm>
 #include <functional>
@@ -107,12 +109,73 @@ struct MatchParams : public MatchParamsBase
 
         return *this;
     }
+
+    MatchParams transpose() const {
+        auto ret = *this;
+        // Transpose and swap layouts
+        MatrixAddressing A, B, C;
+        parseLayout(layouts.A, A);
+        parseLayout(layouts.B, B);
+        parseLayout(layouts.C, C);
+
+        A.transpose();
+        B.transpose();
+        // C.transpose(); // Not transposed, keep as N?
+        std::swap(A, B);
+
+        ret.layouts.A[0] = layoutChar(A.layout);
+        ret.layouts.B[0] = layoutChar(B.layout);
+        ret.layouts.C[0] = layoutChar(C.layout);
+
+        std::swap(ret.precisions.A, ret.precisions.B);
+        std::swap(ret.sizes.m, ret.sizes.n);
+        std::swap(ret.alignment[0], ret.alignment[1]);
+
+        // If the selector points anywhere other than the
+        // storage member variables, override the swapped value
+        if (selector.precisions[0] != &precisions.A[0]) {
+            ret.selector.precisions[1] = selector.precisions[0];
+        }
+        if (selector.precisions[1] != &precisions.B[0]) {
+            ret.selector.precisions[0] = selector.precisions[1];
+        }
+        if (selector.layouts[0] != &layouts.A[0]) {
+            bool isN = *selector.layouts[0] == 'N';
+            ret.selector.layouts[1] = isN ? "T" : "N";
+        }
+        if (selector.layouts[1] != &layouts.B[0]) {
+            bool isN = *selector.layouts[0] == 'N';
+            ret.selector.layouts[0] = isN ? "T" : "N";
+        }
+
+        auto swapTags = [&](char tagA, char tagB) {
+            for (char &c : ret.tagsStorage) {
+                if (c == tagA || c == tagB)
+                    c ^= tagA ^ tagB;
+            }
+        };
+
+        using namespace kcatalog;
+        swapTags(ReqBlock2DA, ReqBlock2DB);
+        swapTags(ReqNoBlock2DA, ReqNoBlock2DB);
+        swapTags(Req64BitA, Req64BitB);
+        swapTags(ReqNo64BitA, ReqNo64BitB);
+        swapTags(ReqSumA, ReqSumB);
+        swapTags(ReqNoSumA, ReqNoSumB);
+        return ret;
+    }
 };
 
 using SelectionObserver = std::function<void (const kcatalog::Entry *entry, double score, EvaluateAuxOutput aux)>*;
 
-const kcatalog::Entry *select(const kcatalog::Catalog &catalog, const MatchParams &pattern, const EvaluateParams &eparams, EvaluateAuxOutput &aux, SelectionObserver observer = nullptr);
-const kcatalog::Entry *select(const kcatalog::Catalog &catalog, int npatterns, const MatchParams *patterns, const EvaluateParams &eparams, EvaluateAuxOutput &aux, SelectionObserver observer = nullptr);
+struct SelectOutcome {
+    const kcatalog::Entry *entry;
+    bool isSwapped;
+    const kcatalog::Entry *operator->() const { return entry; }
+};
+
+SelectOutcome select(const kcatalog::Catalog &catalog, const MatchParams &pattern, const EvaluateParams &eparams, EvaluateAuxOutput &aux, bool allow_transposition = false, SelectionObserver observer = nullptr);
+SelectOutcome select(const kcatalog::Catalog &catalog, int npatterns, const MatchParams *patterns, const EvaluateParams &eparams, EvaluateAuxOutput &aux, bool allow_transposition = false, SelectionObserver observer = nullptr);
 
 // Extended API for iterating over all matching kernels.
 bool matches(const kcatalog::Entry &e, const MatchParams &pattern);

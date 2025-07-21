@@ -64,6 +64,7 @@ struct gen_gemm_kernel_desc_t {
 
     const gemmstone::GEMMProblem *problem() const { return &problem_; };
     const gemmstone::GEMMStrategy *strategy() const { return &strategy_; };
+    bool swapab() const { return swap_ab_; }
 
     const gemmstone::CommonDriverInfo *driver_info() const {
         return &driver_info_;
@@ -93,7 +94,8 @@ protected:
     int stepping_ = 0;
     gemmstone::GEMMProblem problem_ = {};
     gemmstone::GEMMStrategy strategy_;
-    const gemmstone::kcatalog::Entry *entry_ = nullptr;
+    const gemmstone::kcatalog::Entry *entry_;
+    bool swap_ab_;
     gemmstone::EvaluateAuxOutput aux_params_;
     gemmstone::CommonDriverInfo driver_info_;
 
@@ -103,7 +105,7 @@ protected:
     bool disable_systolic_ = false;
     bool relaxed_acc_ = false;
 
-    status_t transfer_post_ops(gpu_post_ops_t &&post_ops, bool swap_ab);
+    status_t transfer_post_ops(gpu_post_ops_t &&post_ops);
 
     status_t finalize(const char *tags);
     void update_driver_info();
@@ -128,7 +130,7 @@ struct gen_gemm_nocopy_kernel_desc_t : public gen_gemm_kernel_desc_t {
     status_t select_kernel(compute::gpu_arch_t arch, int stepping, int eu_count,
             bool has_systolic, bool is_integrated, compute_mode mode,
             int batch_dims, bool trans_a, bool trans_b, bool trans_co,
-            bool swap_ab, int ao_dims, int bo_dims, int asc_dims, int bsc_dims,
+            int ao_dims, int bo_dims, int asc_dims, int bsc_dims,
             bool dst_sround, int a_q2d_group_k, int b_q2d_group_k,
             bool c_offset, bool bias, sum_ab_t reduce_ab, float alpha,
             float beta, data_type_t a_type, data_type_t b_type,
