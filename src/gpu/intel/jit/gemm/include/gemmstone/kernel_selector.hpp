@@ -58,7 +58,20 @@ struct MatchParamsBase
     MatchParamsBase(ngen::HW hw, bool systolicAvailable, bool isIntegrated, const GEMMProblem &problem);
 
 protected:
-    std::array<char, 32> temp;
+    // storage for data in selector
+    struct {
+        // A/B store single types or conversions like [FO]
+        // while C just stores one type (plus null)
+        char A[5] = {'\0'};
+        char B[5] = {'\0'};
+        char C[2] = {'\0'};
+    } precisions;
+    struct {
+        char A[2] = {'\0'};
+        char B[2] = {'\0'};
+        char C[2] = {'\0'};
+    } layouts;
+    std::array<char, 12> tagsStorage = {"\0"};
 };
 
 struct MatchParams : public MatchParamsBase
@@ -72,20 +85,25 @@ struct MatchParams : public MatchParamsBase
     MatchParams &operator=(const MatchParams &other) {
         static_cast<MatchParamsBase &>(*this) = other;
 
-        auto transfer = [&](const char *&value) {
-            auto offset = size_t(value - other.temp.data());
-            if (offset < sizeof(temp))
-                value = temp.data() + offset;
+        // Transfers a char * to the new object, but only if
+        // it's pointing to the storage object (i.e. not char * literal)
+        auto transfer = [&](const char *&value, const char *oldStorage, const char *newStorage) {
+            if (value == oldStorage) {
+                value = newStorage;
+            }
         };
 
-        transfer(selector.precisions[0]);
-        transfer(selector.precisions[1]);
-        transfer(selector.precisions[2]);
-        transfer(selector.layouts[0]);
-        transfer(selector.layouts[1]);
-        transfer(selector.layouts[2]);
-        transfer(tags);
-        transfer(lateTags);
+        // Copy selector pointers from the new storage locations
+        transfer(selector.precisions[0], &other.precisions.A[0], &precisions.A[0]);
+        transfer(selector.precisions[1], &other.precisions.B[0], &precisions.B[0]);
+        transfer(selector.precisions[2], &other.precisions.C[0], &precisions.C[0]);
+
+        transfer(selector.layouts[0], &other.layouts.A[0], &layouts.A[0]);
+        transfer(selector.layouts[1], &other.layouts.B[0], &layouts.B[0]);
+        transfer(selector.layouts[2], &other.layouts.C[0], &layouts.C[0]);
+
+        tags = tagsStorage.data() + (other.tags - other.tagsStorage.data());
+        lateTags = tagsStorage.data() + (other.lateTags - other.tagsStorage.data());
 
         return *this;
     }

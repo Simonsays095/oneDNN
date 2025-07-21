@@ -356,21 +356,19 @@ MatchParamsBase::MatchParamsBase(ngen::HW hw, bool systolicAvailable, bool isInt
 
     selector.kernelType = "gemm";
 
-    std::fill(temp.begin(), temp.end(), '\0');
+    makeABConvert(problem.Ta, problem.Ta_ext, precisions.A);
+    makeABConvert(problem.Tb, problem.Tb_ext, precisions.B);
+    precisions.C[0] = precisionChar(problem.Tc);
+    layouts.A[0] = layoutChar(problem.A.layout);
+    layouts.B[0] = layoutChar(problem.B.layout);
+    layouts.C[0] = layoutChar(equivCLayout);
 
-    makeABConvert(problem.Ta, problem.Ta_ext, &temp[0]);
-    makeABConvert(problem.Tb, problem.Tb_ext, &temp[5]);
-    temp[10] = precisionChar(problem.Tc);
-    temp[12] = layoutChar(problem.A.layout);
-    temp[14] = layoutChar(problem.B.layout);
-    temp[16] = layoutChar(equivCLayout);
-
-    selector.precisions[0] = &temp[0];
-    selector.precisions[1] = &temp[5];
-    selector.precisions[2] = &temp[10];
-    selector.layouts[0] = &temp[12];
-    selector.layouts[1] = &temp[14];
-    selector.layouts[2] = &temp[16];
+    selector.precisions[0] = &precisions.A[0];
+    selector.precisions[1] = &precisions.B[0];
+    selector.precisions[2] = &precisions.C[0];
+    selector.layouts[0] = &layouts.A[0];
+    selector.layouts[1] = &layouts.B[0];
+    selector.layouts[2] = &layouts.C[0];
 
     precisionCExt = precisionChar(problem.Tc_ext);
 
@@ -378,7 +376,7 @@ MatchParamsBase::MatchParamsBase(ngen::HW hw, bool systolicAvailable, bool isInt
     alignment[1] = problem.B.alignment;
     alignment[2] = problem.C.alignment;
 
-    char *tagPtr = &temp[18];
+    char *tagPtr = &tagsStorage[0];
     lateTags = tagPtr;
 
     // Late-only tags. Don't choose lower-performing kernels
