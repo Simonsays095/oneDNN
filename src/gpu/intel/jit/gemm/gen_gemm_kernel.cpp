@@ -624,9 +624,10 @@ status_t gen_gemm_nocopy_kernel_desc_t::select_kernel(compute::gpu_arch_t arch,
     if (!entry_) return status::unimplemented;
 
     // Update A/B/C types from entry.
-    Type Ta_new, Ta_ext_new, Tb_new, Tb_ext_new, Tc_new;
+    Type Ta_new, Ta_ext_new, Tb_new, Tb_ext_new, Tc_new, Tc_ext_new;
     parsePrecisions(entry_->selector.precisions[0], Ta_ext_new, Ta_new);
     parsePrecisions(entry_->selector.precisions[1], Tb_ext_new, Tb_new);
+    parsePrecisions(entry_->selector.precisions[2], Tc_new, Tc_ext_new);
     Tc_new = charToType(entry_->selector.precisions[2][0]);
 
     auto update_type = [](Type &T, Type T_new, bool sz_change = false) {
@@ -640,6 +641,8 @@ status_t gen_gemm_nocopy_kernel_desc_t::select_kernel(compute::gpu_arch_t arch,
     update_type(problem_.Tc, Tc_new, true);
     update_type(problem_.Ta_ext, Ta_ext_new);
     update_type(problem_.Tb_ext, Tb_ext_new);
+    gpu_assert(Tc_ext_new = problem_.Tc_ext)
+            << "Kernel from GEMM catalog does not match dst type";
 
     if (problem_.Ts == Type::invalid) problem_.Ts = problem_.Tc;
 
