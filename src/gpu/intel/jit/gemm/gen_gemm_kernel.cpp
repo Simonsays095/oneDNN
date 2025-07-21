@@ -649,7 +649,7 @@ status_t gen_gemm_nocopy_kernel_desc_t::select_kernel(compute::gpu_arch_t arch,
     auto block_k = entry_->driverInfo.blocking[LoopK];
     if (block_k > 0 && k > block_k && beta != 1.0f) problem_.beta = Scalar();
 
-    return finalize(match_params[0].tags);
+    return finalize(entry_->restrictions.tags);
 }
 
 status_t gen_gemm_xe_systolic_kernel_desc_t::select_kernel(
@@ -772,7 +772,7 @@ status_t gen_gemm_xe_systolic_kernel_desc_t::select_kernel(
 
     if (!entry_) return status::unimplemented;
 
-    return finalize(match_params.tags);
+    return finalize(entry_->restrictions.tags);
 }
 
 void gen_gemm_xe_systolic_kernel_desc_t::choose_unrolls(
