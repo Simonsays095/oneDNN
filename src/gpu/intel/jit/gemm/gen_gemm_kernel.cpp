@@ -572,6 +572,21 @@ status_t gen_gemm_nocopy_kernel_desc_t::select_kernel(compute::gpu_arch_t arch,
         return nullptr;
     });
 
+    // In gemv cases, we can use transposed or non-transposed
+    // layouts for the vector.
+    if (m == 1)
+        for (const auto &pattern : match_params) {
+            match_params.emplace_back(pattern);
+            bool isN = match_params.back().selector.layouts[0][0] == 'N';
+            match_params.back().selector.layouts[0] = (isN ? "T" : "N");
+        }
+    if (n == 1)
+        for (const auto &pattern : match_params) {
+            match_params.emplace_back(pattern);
+            bool isN = match_params.back().selector.layouts[1][0] == 'N';
+            match_params.back().selector.layouts[1] = (isN ? "T" : "N");
+        }
+
     // If both A/B are integers, we can use integer dpas/accumulation
     // but only if there are no grouped scales (in these cases,
     // we apply scales before dpas, and we must use fp dpas)
