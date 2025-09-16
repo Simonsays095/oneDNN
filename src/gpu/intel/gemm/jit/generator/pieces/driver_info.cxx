@@ -77,6 +77,7 @@ CommonDriverInfo Generator<hw>::driverInfo(GEMMProblem problem, const GEMMStrate
     if (problem.alpha.pointer())                                  info.flags |= FlagAlphaPtr;
     if (problem.beta.pointer())                                   info.flags |= FlagBetaPtr;
     if (strategy.nondeterministic(problem))                       info.flags |= FlagNondeterministic;
+    if (!strategy.needsBarrier())                                 info.flags |= FlagNoBarriers;
     if (strategy.scramble[LoopM])                                 info.flags |= FlagScrambleM;
     if (strategy.scramble[LoopN])                                 info.flags |= FlagScrambleN;
     if (strategy.tlbWarmup)                                       info.flags |= FlagExtraWG;

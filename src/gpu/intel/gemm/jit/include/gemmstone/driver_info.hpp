@@ -67,6 +67,7 @@ enum DriverInfoFlags : uint32_t {
     FlagFixedWGK = 0x1000,          // With local k-parallelization, wgK is fixed
     FlagZeroTempC = 0x2000,         // GEMM kernel expects temporary C buffer to be pre-zeroed and will leave zeros there.
     FlagNondeterministic = 0x4000,  // Kernel produces nondeterministic results.
+    FlagNoBarriers = 0x8000,        // GEMM kernel does not use barriers
     FlagMaskFillGoal = 0xF0000,     // Fraction of available thread slots to fill, in sixteenths
     FlagShiftFillGoal = 16,         //   (starting bit)
     FlagScrambleM = 0x100000,       // Scramble WGs in m dimension.
@@ -121,6 +122,7 @@ struct CommonDriverInfo {
     bool betaPtr()            const { return flags & FlagBetaPtr; }
     bool fixedWGK()           const { return flags & FlagFixedWGK; }
     bool nondeterministic()   const { return flags & FlagNondeterministic; }
+    bool noBarriers()        const { return flags & FlagNoBarriers; }
     bool scrambleM()          const { return flags & FlagScrambleM; }
     bool scrambleN()          const { return flags & FlagScrambleN; }
     int extraWGs()            const { return (flags & FlagExtraWG) ? 1 : 0; }
