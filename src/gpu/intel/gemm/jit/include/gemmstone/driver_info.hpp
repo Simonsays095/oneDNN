@@ -105,7 +105,7 @@ struct CommonDriverInfo {
     bool isLinearOrder()      const { return (loopOrder[0] != LoopNone) && (loopOrder[0] & 0x80); }
     bool isPersistent()       const { return (loopOrder[0] != LoopNone) && (loopOrder[0] & LoopPersistent); }
     bool fixedWG()            const { return wgUpdate == WGFixed; }
-    int  threadsPerWG()       const { return wg[LoopM] * wg[LoopN] * wg[LoopK] * wgExpand; }
+    int  threadsPerWG()       const { return wg[LoopM] * wg[LoopN] * (kParallelVariable() ? 1 : wg[LoopK]) * wgExpand; }
     bool kRemainderHandling() const { return flags & FlagKRemainderHandling; }
     bool kParallel()          const { return flags & FlagKParallel; }
     bool zParallel()          const { return flags & FlagZParallel; }

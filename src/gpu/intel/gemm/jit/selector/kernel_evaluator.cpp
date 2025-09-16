@@ -230,6 +230,12 @@ double evaluateECore(const kcatalog::Entry &e, const DerivedEvaluateParams &dp, 
     auto capacity1 = dp.hwThreadsPartialWave;
     auto partialWaveCount = dp.partialWaveCount;
 
+    auto unrollM = e.driverInfo.unroll[LoopM];
+    auto unrollN = e.driverInfo.unroll[LoopN];
+
+    auto wgM = e.driverInfo.wg[LoopM];
+    auto wgN = e.driverInfo.wg[LoopN];
+
     // Choose wgK and per-k thread size.
     aux.wgK = 1;
     if (e.driverInfo.fixedWGK())
@@ -292,8 +298,29 @@ double evaluateECore(const kcatalog::Entry &e, const DerivedEvaluateParams &dp, 
         partialWaveCount /= aux.wgK;
     }
 
-    double threadsFull = std::floor(threads / capacity) * capacity;
-    double threadsPartial = threads - threadsFull;
+    auto threadsPerWG = e.driverInfo.threadsPerWG();
+    int m_wg_threads = std::min(divUp(m,unrollM), static_cast<long>(wgM));
+    int n_wg_threads = std::min(divUp(n,unrollN), static_cast<long>(wgN));
+    auto activeWGThreads = m_wg_threads * n_wg_threads;
+    if (!e.driverInfo.kParallelVariable())
+        activeWGThreads *= aux.wgK;
+    if (!e.driverInfo.noBarriers()) {
+        activeWGThreads = threadsPerWG;
+    }
+
+    int WGPerFullWave = dp.ssCount * (1 + (capacity - capacity1) / (activeWGThreads * dp.ssCount));
+    int threadsPerFullWave = WGPerFullWave * threadsPerWG;
+    int wavesFull = static_cast<int>(threads / threadsPerFullWave);
+    // Ef and Ep fitting assumes full waves and no early-exit threads.
+    // -- Under those conditions, we can dispatch up to `capacity` threads in a full wave.
+    // -- In reality, we can actually dispatch up to `threadsPerFullWave` threads in a full wave
+    // These differ when early-exit threads exist: threadsPerFullWave can be much higher.
+    // Unfortunately, this difference means that we have to pretend the model is correct
+    // even in early-exit cases, and scale `threadsFull` and `threadsPartial` by
+    // capacity/threadsPerFullWave for scoring purposes once we compute them correctly.
+    int actualThreadsFull = wavesFull * threadsPerFullWave;
+    double threadsFull = static_cast<float>(actualThreadsFull) * capacity / threadsPerFullWave;
+    double threadsPartial = (threads - actualThreadsFull) * capacity / threadsPerFullWave;
     double partialWaves = std::ceil(threadsPartial / capacity1);
     double npartial = std::ceil(threads / capacity1);
 
@@ -504,19 +531,18 @@ DerivedEvaluateParams getDerivedParams(const kcatalog::Entry &e, const EvaluateP
             break;
     }
 
-    int ssCount;
     switch (e.selector.hw) {
         case kcatalog::HWTagGen12LP:
         case kcatalog::HWTagXeHPG:
-            ssCount = p.euCount >> 4;
+            dp.ssCount = p.euCount >> 4;
             break;
         default:
-            ssCount = p.euCount >> 3;
+            dp.ssCount = p.euCount >> 3;
             break;
     }
 
     dp.hwThreadCapacity = dp.threadsPerEU * p.euCount;
-    dp.hwThreadsPartialWave = threadsPerWG * ssCount;
+    dp.hwThreadsPartialWave = threadsPerWG * dp.ssCount;
     dp.partialWaveCount = divUp(dp.hwThreadCapacity, dp.hwThreadsPartialWave);
 
     dp.autoatomic = (dp.beta == 1) && !p.cConvert && !p.postOps && e.driverInfo.mayUseAutoAtomic();

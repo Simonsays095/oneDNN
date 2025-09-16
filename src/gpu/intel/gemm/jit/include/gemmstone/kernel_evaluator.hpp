@@ -45,6 +45,7 @@ struct DerivedEvaluateParams : public EvaluateParams {
     int64_t mPad, nPad;
     double threadCount;
     int threadsPerEU;
+    int ssCount;
     int hwThreadCapacity;
     int hwThreadsPartialWave;
     int partialWaveCount;
