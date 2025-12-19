@@ -153,10 +153,8 @@ void Generator<hw>::kLoop(KLoop type, const GEMMProblem &problem, GEMMStrategy &
 
     // Get r0 information where needed.
     GRF r0_info;
-    if (needBarrier) {
-        if (state.r0_info.isARF()) stub();
-        r0_info = GRF{state.r0_info.getBase()};
-    }
+    if (needBarrier)
+        r0_info = state.r0InfoGRF();
 
     // Unified barrier and SLM fence handling for k loop.
     auto &modBarrierFence = state.modBarrierFence;
