@@ -504,6 +504,7 @@ status_t pd_t::init_GEMMProblem(
 
     auto a_type = get_type(DNNL_ARG_A);
     auto b_type = get_type(DNNL_ARG_B);
+    auto c_type = get_type(DNNL_ARG_C);
 
     auto m = desc()->m();
     auto n = desc()->n();
@@ -511,37 +512,22 @@ status_t pd_t::init_GEMMProblem(
 
     auto align_a = align(DNNL_ARG_A);
     auto align_b = align(DNNL_ARG_B);
+    auto align_c = align(DNNL_ARG_C);
+    align_a = nstl::max(align_a, (int)types::data_type_size(a_type));
+    align_b = nstl::max(align_b, (int)types::data_type_size(b_type));
+    align_c = nstl::max(align_c, (int)types::data_type_size(c_type));
 
     auto lda = ld(DNNL_ARG_A);
     auto ldb = ld(DNNL_ARG_B);
+    auto ldc = ld(DNNL_ARG_C);
 
     auto trans_a = this->trans_a();
     auto trans_b = this->trans_b();
 
-    if (swap_ab_) {
-        std::swap(a_type, b_type);
-        std::swap(m, n);
-        std::swap(align_a, align_b);
-        std::swap(lda, ldb);
-        std::swap(trans_a, trans_b);
-        trans_a = !trans_a;
-        trans_b = !trans_b;
-    }
-
-    align_a = nstl::max(align_a, (int)types::data_type_size(a_type));
-    auto a_size = (trans_a ? m : k) * lda * types::data_type_size(a_type);
-
-    align_b = nstl::max(align_b, (int)types::data_type_size(b_type));
-    auto b_size = (trans_b ? k : n) * ldb * types::data_type_size(b_type);
-
-    bool int_acc = utils::one_of(a_type, data_type::s8, data_type::u8);
+    // TODO: Update this logic to remove the swap_ab_
+    auto eff_a_type = swap_ab_ ? b_type : a_type;
+    bool int_acc = utils::one_of(eff_a_type, data_type::s8, data_type::u8);
     int_acc &= !(a_grouped() || b_grouped());
-    auto c_type = desc()->c_type();
-    auto align_c
-            = nstl::max(align(DNNL_ARG_C), (int)types::data_type_size(c_type));
-    auto ldc = desc()->ldc();
-    auto c_size = n * ldc * types::data_type_size(c_type);
-
     auto co_type = with_bias() ? desc()->bias_type()
             : with_sum_ab()    ? desc()->sum_ab_type
             : int_acc          ? data_type::s32
@@ -569,20 +555,12 @@ status_t pd_t::init_GEMMProblem(
     }
     if (wei_decomp_) { acc_type = data_type::f32; }
 
-    auto trans_co = trans_bias();
-    if (swap_ab_) trans_co = !trans_co;
     auto dst_sround = with_sround_;
     bool c_offset = with_c_zero_points();
     bool bias = with_bias();
 
     jit::quant_params a_quant = this->a_quant;
     jit::quant_params b_quant = this->b_quant;
-
-    if (swap_ab()) {
-        std::swap(a_quant, b_quant);
-        std::swap(a_quant.group_m, a_quant.group_n);
-        std::swap(b_quant.group_m, b_quant.group_n);
-    }
 
     problem.Ta = problem.Ta_ext = convert_dnnl_to_kernel_type(a_type);
     problem.Tb = problem.Tb_ext = convert_dnnl_to_kernel_type(b_type);
@@ -602,6 +580,9 @@ status_t pd_t::init_GEMMProblem(
     problem.C.setAlignment(align_c);
 
     // Consolidate specialization logic to limit large buffer configurations
+    auto a_size = (trans_a ? m : k) * lda * types::data_type_size(a_type);
+    auto b_size = (trans_b ? k : n) * ldb * types::data_type_size(b_type);
+    auto c_size = n * ldc * types::data_type_size(c_type);
     bool needA64 = std::max({a_size, b_size, c_size})
             > std::numeric_limits<uint32_t>::max();
     problem.A.needA64 = needA64;
@@ -619,8 +600,9 @@ status_t pd_t::init_GEMMProblem(
     problem.aoPtrDims = a_quant.zp_host_scalar ? -1 : a_quant.zp_ndims;
     problem.boPtrDims = b_quant.zp_host_scalar ? -1 : b_quant.zp_ndims;
     problem.AO.layout = MatrixLayout::N;
-    problem.BO.layout
-            = (problem.bOffset2D()) ? MatrixLayout::N : MatrixLayout::T;
+    // TODO: refactor to remove swap_ab_
+    bool boN = swap_ab_ ? problem.aOffset2D() : problem.bOffset2D();
+    problem.BO.layout = boN ? MatrixLayout::N : MatrixLayout::T;
     problem.AO.crosspack = problem.BO.crosspack = 1;
     problem.AO.packSize = problem.BO.packSize = 0;
     problem.A_scale = problem.Ag = problem.AO;
@@ -638,13 +620,13 @@ status_t pd_t::init_GEMMProblem(
     problem.bqGroupN = b_quant.group_n;
     if (a_quant.scales_type != data_type::undef) {
         problem.Ta_scale = convert_dnnl_to_kernel_type(a_quant.scales_type);
-        problem.A_scale.layout = swap_ab() ? MatrixLayout::T : MatrixLayout::N;
+        problem.A_scale.layout = MatrixLayout::N;
         problem.A_scale.setAlignment(
                 int(types::data_type_size(a_quant.scales_type)));
     }
     if (b_quant.scales_type != data_type::undef) {
         problem.Tb_scale = convert_dnnl_to_kernel_type(b_quant.scales_type);
-        problem.B_scale.layout = swap_ab() ? MatrixLayout::T : MatrixLayout::N;
+        problem.B_scale.layout = MatrixLayout::N;
         problem.B_scale.setAlignment(
                 int(types::data_type_size(b_quant.scales_type)));
     }
@@ -664,7 +646,9 @@ status_t pd_t::init_GEMMProblem(
             && b_quant.zp_ndims >= 0)
         problem.Tb = Type::s8;
 
-    if (problem.Ta.isInteger()) problem.Ts = Type::f32;
+    // TODO: Refactor to remove the swap_ab_
+    bool isInteger = swap_ab_ ? problem.Tb.isInteger() : problem.Ta.isInteger();
+    if (isInteger) problem.Ts = Type::f32;
 
     if (alpha() == 1.0f) problem.alpha = alpha();
     if (beta() == 0.0f || beta() == 1.0f) problem.beta = beta();
@@ -674,7 +658,6 @@ status_t pd_t::init_GEMMProblem(
             gpu_post_ops, post_ops_, dst_md(), get_post_op_specializations()));
 
     CHECK(transfer_post_ops(problem, std::move(gpu_post_ops)));
-    if (swap_ab()) problem.postOps.transpose();
 
     auto reduce_ab = sum_ab();
     if (c_offset || bias || reduce_ab != sum_ab::sum_none) {
@@ -683,12 +666,11 @@ status_t pd_t::init_GEMMProblem(
         if (c_offset) problem.cOffset = COffset::Post;
         problem.CO.crosspack = 1;
         problem.CO.alignment = problem.C.alignment;
-        problem.CO.layout = trans_co ? MatrixLayout::T : MatrixLayout::N;
+        problem.CO.layout = trans_bias() ? MatrixLayout::T : MatrixLayout::N;
     }
 
     problem.sumA = (reduce_ab == sum_ab::sum_b_col);
     problem.sumB = (reduce_ab == sum_ab::sum_a_row);
-    if (swap_ab_) std::swap(problem.sumA, problem.sumB);
     problem.forceGroupSumsA = a_quant.force_gs;
     problem.forceGroupSumsB = b_quant.force_gs;
 
@@ -716,6 +698,30 @@ status_t pd_t::init_GEMMProblem(
         problem.Bg.setAlignment(problem.Tbg.paddedSize());
         if (problem.aqGroupK == 0) problem.aqGroupK = problem.bqGroupK;
         if (problem.bqGroupK == 0) problem.bqGroupK = problem.aqGroupK;
+    }
+    if (swap_ab_) {
+        std::swap(problem.Ta, problem.Tb);
+        std::swap(problem.Ta_ext, problem.Tb_ext);
+        std::swap(problem.Tao, problem.Tbo);
+        problem.A.layout = transposeLayout(problem.A.layout);
+        problem.B.layout = transposeLayout(problem.B.layout);
+        std::swap(problem.A.alignment, problem.B.alignment);
+        std::swap(problem.aOffset, problem.bOffset);
+        std::swap(problem.aoPtrDims, problem.boPtrDims);
+        std::swap(problem.AO.alignment, problem.BO.alignment);
+        std::swap(problem.asPtrDims, problem.bsPtrDims);
+        std::swap(problem.aqGroupM, problem.bqGroupN);
+        problem.A_scale.layout = transposeLayout(problem.A_scale.layout);
+        problem.B_scale.layout = transposeLayout(problem.B_scale.layout);
+        std::swap(problem.Ta_scale, problem.Tb_scale);
+        std::swap(problem.A_scale.layout, problem.B_scale.layout);
+        std::swap(problem.A_scale.alignment, problem.B_scale.alignment);
+        problem.CO.layout = transposeLayout(problem.CO.layout);
+        std::swap(problem.sumA, problem.sumB);
+        std::swap(problem.forceGroupSumsA, problem.forceGroupSumsB);
+        std::swap(problem.Tag, problem.Tbg);
+        std::swap(problem.Ag.alignment, problem.Bg.alignment);
+        problem.postOps.transpose();
     }
     return status::success;
 }
