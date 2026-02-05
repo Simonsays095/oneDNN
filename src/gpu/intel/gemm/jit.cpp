@@ -17,6 +17,7 @@
 #include "gpu/intel/gemm/jit.hpp"
 #include "common/c_types_map.hpp"
 #include "common/type_helpers.hpp"
+#include "common/utils.hpp"
 #include "gemmstone/driver_info.hpp"
 #include "gpu/intel/compute/utils.hpp"
 #include "gpu/intel/gemm/host_scalars.hpp"
@@ -56,8 +57,9 @@ status_t gen_t::launch_nocopy(const exec_ctx_t &ctx,
         int64_t offset_c, int64_t offset_aq, int64_t offset_bq,
         int64_t offset_co, int64_t *offset_po_src, int32_t lda, int32_t ldb,
         int32_t ldc, int32_t m, int32_t n, int32_t k, int32_t k0, float alpha,
-        float beta, int32_t cmask, bool last_k_block, bool swap_ab,
-        bool disable_hilbert) const {
+        float beta, int32_t cmask, bool last_k_block, bool disable_hilbert,
+        const batch_strides_t &A_batch, const batch_strides_t &B_batch,
+        const batch_strides_t &C_batch) const {
     if (pd()->desc()->batch() == 0) return status::success;
 
     uint32_t flags = 0;
@@ -90,12 +92,14 @@ status_t gen_t::launch_nocopy(const exec_ctx_t &ctx,
     set_scalar_arg_cvt(arg_list, argn++, alpha, scalar_type_);
     set_scalar_arg_cvt(arg_list, argn++, beta, scalar_type_);
 
-    bool a_zp_ptr = pd()->with_a_zero_points() && !problem->aOffsetHostScalar();
-    bool b_zp_ptr = pd()->with_b_zero_points() && !problem->bOffsetHostScalar();
-    if (swap_ab) std::swap(a_zp_ptr, b_zp_ptr);
-
-    if (a_zp_ptr) arg_list.set(argn++, *ao);
-    if (b_zp_ptr) arg_list.set(argn++, *bo);
+    if (problem->hasAOffsetPtr()) {
+        if (!check_memory_storage(ao, "ao")) return status::runtime_error;
+        arg_list.set(argn++, *ao);
+    }
+    if (problem->hasBOffsetPtr()) {
+        if (!check_memory_storage(bo, "bo")) return status::runtime_error;
+        arg_list.set(argn++, *bo);
+    }
     if (problem->aOffsetHostScalar()) arg_list.set(argn++, ao_host_scalar);
     if (problem->bOffsetHostScalar()) arg_list.set(argn++, bo_host_scalar);
     if (problem->aScale2D()) arg_list.set(argn++, *a_scales);
@@ -169,10 +173,9 @@ status_t gen_t::launch_nocopy(const exec_ctx_t &ctx,
 
     if (pd()->batch_dims() >= 1) {
         for (int i = pd()->batch_dims() - 1; i >= 0; i--) {
-            auto stride_a = int32_t(pd()->stride(DNNL_ARG_A, i));
-            auto stride_b = int32_t(pd()->stride(DNNL_ARG_B, i));
-            if (swap_ab) std::swap(stride_a, stride_b);
-            auto stride_c = int32_t(pd()->desc()->stride_c(i));
+            auto stride_a = into<int32_t>(A_batch.strides[i]);
+            auto stride_b = into<int32_t>(B_batch.strides[i]);
+            auto stride_c = into<int32_t>(C_batch.strides[i]);
             if (jit::enable_generator_dsl()) {
                 auto hw = ngen::getCore(
                         ((ngen::Product *)&utils::downcast<intel::engine_t *>(
@@ -186,15 +189,14 @@ status_t gen_t::launch_nocopy(const exec_ctx_t &ctx,
                 // relaxed by rounding down the surface pointer and adjusting
                 // the width accordingly.
                 auto base_alignment = intel::jit::block_2d_base_alignment(hw);
-                auto a_type = pd()->get_type(DNNL_ARG_A);
-                auto b_type = pd()->get_type(DNNL_ARG_B);
-                if (swap_ab) std::swap(a_type, b_type);
-                auto a_size = types::data_type_size(a_type);
+                auto a_type = problem->Ta_ext;
+                auto a_size = a_type.bits() / 8;
                 if (stride_a * a_size % base_alignment) {
                     gpu_warning() << "Unimplemented load transform";
                     return status::runtime_error;
                 }
-                auto b_size = types::data_type_size(b_type);
+                auto b_type = problem->Tb_ext;
+                auto b_size = b_type.bits() / 8;
                 if (stride_b * b_size % base_alignment) {
                     gpu_warning() << "Unimplemented load transform";
                     return status::runtime_error;
@@ -203,29 +205,26 @@ status_t gen_t::launch_nocopy(const exec_ctx_t &ctx,
             arg_list.set(argn++, stride_a);
             arg_list.set(argn++, stride_b);
             arg_list.set(argn++, stride_c);
-            int eff_a_arg = DNNL_ARG_A;
-            int eff_b_arg = DNNL_ARG_B;
-            if (swap_ab) std::swap(eff_a_arg, eff_b_arg);
             if (problem->hasAScalePtr()) {
-                arg_list.set(argn++, pd()->scale_stride(i, eff_a_arg));
+                arg_list.set(argn++, A_batch.scales_strides[i]);
             }
             if (problem->hasBScalePtr()) {
-                arg_list.set(argn++, pd()->scale_stride(i, eff_b_arg));
+                arg_list.set(argn++, B_batch.scales_strides[i]);
             }
             if (problem->hasCMXScale()) {
-                arg_list.set(argn++, stride_c / problem->cqGroupM);
+                arg_list.set(argn++, C_batch.scales_strides[i]);
             }
             if (problem->hasAOffsetPtr()) {
-                arg_list.set(argn++, pd()->zp_stride(i, eff_a_arg));
+                arg_list.set(argn++, A_batch.zp_strides[i]);
             }
             if (problem->hasBOffsetPtr()) {
-                arg_list.set(argn++, pd()->zp_stride(i, eff_b_arg));
+                arg_list.set(argn++, B_batch.zp_strides[i]);
             }
             if (problem->needsAGroupSums()) {
-                arg_list.set(argn++, pd()->gs_stride(i, eff_a_arg));
+                arg_list.set(argn++, A_batch.gs_strides[i]);
             }
             if (problem->needsBGroupSums()) {
-                arg_list.set(argn++, pd()->gs_stride(i, eff_b_arg));
+                arg_list.set(argn++, B_batch.gs_strides[i]);
             }
         }
         for (int i = 0; i < po_count; i++) {
@@ -575,6 +574,33 @@ status_t gen_t::execute(const exec_ctx_t &ctx) const {
     block_m = utils::rnd_up(block_m, nocopy_info()->wgTile(gemmstone::LoopM));
     block_n = utils::rnd_up(block_n, nocopy_info()->wgTile(gemmstone::LoopN));
 
+    // Batched dimension strides are passed at runtime. Compute these here, as we may
+    // need to swap them if we're using swap_ab
+    batch_strides_t A_batch, B_batch, C_batch;
+    for (int i = pd()->batch_dims() - 1; i >= 0; i--) {
+        A_batch.strides.emplace_back(pd()->stride(DNNL_ARG_A, i));
+        B_batch.strides.emplace_back(pd()->stride(DNNL_ARG_B, i));
+        C_batch.strides.emplace_back(pd()->stride(DNNL_ARG_C, i));
+        if (problem.hasCMXScale())
+            C_batch.scales_strides.emplace_back(
+                    pd()->stride(DNNL_ARG_C, i) / problem.cqGroupM);
+        if (problem.hasAScalePtr())
+            A_batch.scales_strides.emplace_back(pd()->stride(DNNL_ARG_A, i));
+        if (problem.hasBScalePtr())
+            A_batch.scales_strides.emplace_back(pd()->stride(DNNL_ARG_B, i));
+        if (problem.hasAOffsetPtr())
+            A_batch.zp_strides.emplace_back(pd()->stride(DNNL_ARG_A, i));
+        if (problem.hasBOffsetPtr())
+            A_batch.zp_strides.emplace_back(pd()->stride(DNNL_ARG_B, i));
+        if (problem.needsAGroupSums())
+            A_batch.gs_strides.emplace_back(pd()->stride(DNNL_ARG_A, i));
+        if (problem.needsBGroupSums())
+            A_batch.gs_strides.emplace_back(pd()->stride(DNNL_ARG_B, i));
+    }
+    batch_strides_t *eff_A_batch = &A_batch;
+    batch_strides_t *eff_B_batch = &B_batch;
+    if (swap_ab) std::swap(eff_A_batch, eff_B_batch);
+
     int32_t k0 = 1;
     if (k_parallel_fixed) {
         k0 = block_k;
@@ -587,7 +613,7 @@ status_t gen_t::execute(const exec_ctx_t &ctx) const {
                     c_scales, ag, bg, *co, nullptr, sround_seed, po_count,
                     po_srcs, off_a0, off_b0, off_c0, off_aq0, off_bq0, off_co0,
                     po_offsets0, lda, ldb, ldc, m, n, 0, 1, 1.0f, beta, 0,
-                    false, swap_ab, true);
+                    false, true, *eff_A_batch, *eff_B_batch, C_batch);
             if (status) return status;
             beta = 1.0f;
         }
@@ -653,7 +679,8 @@ status_t gen_t::execute(const exec_ctx_t &ctx) const {
                         off_c, off_aq, off_bq, off_co, po_offsets, lda, ldb,
                         ldc, into<int32_t>(size_m), into<int32_t>(size_n),
                         into<int32_t>(size_k), k0, alpha, eff_beta, cmask,
-                        last_k_block, swap_ab, disable_hilbert);
+                        last_k_block, disable_hilbert, A_batch, B_batch,
+                        C_batch);
 
                 if (status) return status;
             }

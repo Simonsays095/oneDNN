@@ -37,6 +37,10 @@ namespace gpu {
 namespace intel {
 namespace gemm {
 
+struct batch_strides_t {
+    std::vector<dim_t> strides, zp_strides, scales_strides, gs_strides;
+};
+
 struct gen_t : public primitive_t {
     struct pd_t : public jit::pd_t {
         using jit::pd_t::pd_t;
@@ -593,7 +597,9 @@ private:
             int64_t offset_bq, int64_t offset_co, int64_t *offset_po_src,
             int32_t lda, int32_t ldb, int32_t ldc, int32_t m, int32_t n,
             int32_t k, int32_t k0, float alpha, float beta, int32_t cmask,
-            bool last_k_block, bool swap_ab, bool disable_hilbert) const;
+            bool last_k_block, bool disable_hilbert,
+            const batch_strides_t &A_batch, const batch_strides_t &B_batch,
+            const batch_strides_t &C_batch_strides) const;
 
     const pd_t *pd() const { return (const pd_t *)primitive_t::pd().get(); }
     const gemmstone::CommonDriverInfo *nocopy_info() const {
