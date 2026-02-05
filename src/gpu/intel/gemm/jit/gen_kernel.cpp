@@ -522,6 +522,38 @@ gen_nocopy_desc_t::select_kernel(compute::gpu_arch_t arch, int stepping,
         match_params.back().selector.precisions[2] = "I";
     }
 
+    // Treat vectors as either row- or column-major
+    if (lda == 1) {
+        size_t npatterns = match_params.size();
+        for (size_t i = 0; i < npatterns; i++) {
+            char layout = *match_params.back().selector.layouts[0];
+            if (!utils::one_of(layout, 'N', 'T')) continue;
+            match_params.push_back(match_params[i]);
+            if (layout == 'N') match_params.back().selector.layouts[0] = "T";
+            if (layout == 'T') match_params.back().selector.layouts[0] = "N";
+        }
+    }
+    if (ldb == 1) {
+        size_t npatterns = match_params.size();
+        for (size_t i = 0; i < npatterns; i++) {
+            char layout = *match_params.back().selector.layouts[1];
+            if (!utils::one_of(layout, 'N', 'T')) continue;
+            match_params.push_back(match_params[i]);
+            if (layout == 'N') match_params.back().selector.layouts[1] = "T";
+            if (layout == 'T') match_params.back().selector.layouts[1] = "N";
+        }
+    }
+    if (ldc == 1) {
+        size_t npatterns = match_params.size();
+        for (size_t i = 0; i < npatterns; i++) {
+            char layout = *match_params.back().selector.layouts[2];
+            if (!utils::one_of(layout, 'N', 'T')) continue;
+            match_params.push_back(match_params[i]);
+            if (layout == 'N') match_params.back().selector.layouts[2] = "T";
+            if (layout == 'T') match_params.back().selector.layouts[2] = "N";
+        }
+    }
+
     eval_params_.sizes = base.sizes;
     eval_params_.alpha = alpha;
     eval_params_.beta = beta;

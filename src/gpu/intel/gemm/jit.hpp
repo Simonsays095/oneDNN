@@ -94,14 +94,6 @@ struct gen_t : public primitive_t {
             swap_ab_ &= !(utils::one_of(d->a_type(), f8_e5m2, f8_e4m3)
                     && d->b_type() == bf16);
 
-            if (swap_ab_) {
-                // Do not use transposed B when it is unnecessary
-                if (!transa_ && m == 1) {
-                    transa_ = true;
-                    lda_ = d->k();
-                }
-            }
-
             // Pad leading dimensions in case of a single row/column.
             if ((d->k() == 1 && !trans_a()) || (m == 1 && trans_a())) {
                 lda_ = utils::rnd_up(lda_, 16);
