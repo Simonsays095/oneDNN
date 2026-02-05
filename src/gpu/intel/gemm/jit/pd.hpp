@@ -142,7 +142,6 @@ struct pd_t : public gemm::pd_t {
     memory_desc_t prelu_wei_md, a_scale_md_, b_scale_md_, c_scale_md_;
     memory_desc_t a_zp_md_, b_zp_md_;
     memory_desc_t a_gs_md_, b_gs_md_;
-    bool swap_ab_ = false;
     dim_t lda_ = 0, ldb_ = 0;
     bool transa_ = false, transb_ = false;
     bool with_sround_ = false;
@@ -215,8 +214,6 @@ struct pd_t : public gemm::pd_t {
     bool dy_quant_enabled();
     bool wei_decomp();
     bool quant_enabled();
-
-    bool swap_ab() const { return swap_ab_; }
 
     int batch_dims() const { return nstl::max(desc()->c_desc.ndims - 2, 0); }
     bool trans_a() const { return transa_; }

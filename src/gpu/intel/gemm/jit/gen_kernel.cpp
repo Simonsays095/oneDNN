@@ -373,6 +373,21 @@ gen_nocopy_desc_t::select_kernel(compute::gpu_arch_t arch, int stepping,
     using namespace ngen;
     using namespace kcatalog;
 
+    // Set up problem structure.
+    problem_ = problem;
+
+    // If m = 1, swap A/B to use more efficient n = 1 kernels if possible.
+    bool a_trans = problem.A.layout == MatrixLayout::T;
+    bool c_trans = problem.C.layout == MatrixLayout::T;
+    bool check_lda = a_trans || lda == 1;
+    swap_ab_ = c_trans || (m == 1 && ldc == 1 && check_lda);
+
+    if (swap_ab_) {
+        std::swap(m, n);
+        std::swap(lda, ldb);
+        problem_.transpose();
+    }
+
     arch_ = arch;
     hw_ = convert_dnnl_arch_to_ngen(arch);
     stepping_ = stepping;
@@ -382,9 +397,6 @@ gen_nocopy_desc_t::select_kernel(compute::gpu_arch_t arch, int stepping,
     eu_count_ = eu_count;
     disable_systolic_ = !has_systolic;
     relaxed_acc_ = mode & mode_relaxed_acc;
-
-    // Set up problem structure.
-    problem_ = problem;
 
     // Select a kernel from the catalog.
     std::vector<MatchParams> match_params;
@@ -516,7 +528,7 @@ gen_nocopy_desc_t::select_kernel(compute::gpu_arch_t arch, int stepping,
     // but only if there are no grouped scales (in these cases,
     // we apply scales before dpas, and we must use fp dpas)
     bool allow = gpu_utils::dev_getenv("ALLOW_IACC", true);
-    bool is_int = problem.Ta_ext.isInteger() && problem.Tb_ext.isInteger();
+    bool is_int = problem_.Ta_ext.isInteger() && problem_.Tb_ext.isInteger();
     if (problem_.asPtrDims < 1 && problem_.bsPtrDims < 1 && is_int && allow) {
         match_params.push_back(base);
         match_params.back().selector.precisions[2] = "I";
@@ -558,7 +570,7 @@ gen_nocopy_desc_t::select_kernel(compute::gpu_arch_t arch, int stepping,
     eval_params_.alpha = alpha;
     eval_params_.beta = beta;
     eval_params_.postOps = !problem_.postOps.empty();
-    eval_params_.cConvert = (problem.Tc != problem.Tc_ext);
+    eval_params_.cConvert = (problem_.Tc != problem_.Tc_ext);
     eval_params_.euCount = eu_count;
     eval_params_.batch = (problem_.batchDims > 0);
     eval_params_.deterministic = (mode & mode_deterministic);

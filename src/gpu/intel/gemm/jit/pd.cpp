@@ -524,9 +524,7 @@ status_t pd_t::init_GEMMProblem(
     auto trans_a = this->trans_a();
     auto trans_b = this->trans_b();
 
-    // TODO: Update this logic to remove the swap_ab_
-    auto eff_a_type = swap_ab_ ? b_type : a_type;
-    bool int_acc = utils::one_of(eff_a_type, data_type::s8, data_type::u8);
+    bool int_acc = utils::one_of(a_type, data_type::s8, data_type::u8);
     int_acc &= !(a_grouped() || b_grouped());
     auto co_type = with_bias() ? desc()->bias_type()
             : with_sum_ab()    ? desc()->sum_ab_type
@@ -600,9 +598,7 @@ status_t pd_t::init_GEMMProblem(
     problem.aoPtrDims = a_quant.zp_host_scalar ? -1 : a_quant.zp_ndims;
     problem.boPtrDims = b_quant.zp_host_scalar ? -1 : b_quant.zp_ndims;
     problem.AO.layout = MatrixLayout::N;
-    // TODO: refactor to remove swap_ab_
-    bool boN = swap_ab_ ? problem.aOffset2D() : problem.bOffset2D();
-    problem.BO.layout = boN ? MatrixLayout::N : MatrixLayout::T;
+    problem.BO.layout = problem.bOffset2D() ? MatrixLayout::N : MatrixLayout::T;
     problem.AO.crosspack = problem.BO.crosspack = 1;
     problem.AO.packSize = problem.BO.packSize = 0;
     problem.A_scale = problem.Ag = problem.AO;
@@ -646,9 +642,7 @@ status_t pd_t::init_GEMMProblem(
             && b_quant.zp_ndims >= 0)
         problem.Tb = Type::s8;
 
-    // TODO: Refactor to remove the swap_ab_
-    bool isInteger = swap_ab_ ? problem.Tb.isInteger() : problem.Ta.isInteger();
-    if (isInteger) problem.Ts = Type::f32;
+    if (problem.Ta.isInteger()) problem.Ts = Type::f32;
 
     if (alpha() == 1.0f) problem.alpha = alpha();
     if (beta() == 0.0f || beta() == 1.0f) problem.beta = beta();
@@ -699,7 +693,6 @@ status_t pd_t::init_GEMMProblem(
         if (problem.aqGroupK == 0) problem.aqGroupK = problem.bqGroupK;
         if (problem.bqGroupK == 0) problem.bqGroupK = problem.aqGroupK;
     }
-    if (swap_ab_) problem.transpose();
     return status::success;
 }
 

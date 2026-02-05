@@ -66,6 +66,7 @@ struct gen_desc_t {
 
     const gemmstone::GEMMProblem *problem() const { return &problem_; }
     const gemmstone::GEMMStrategy *strategy() const { return &strategy_; }
+    bool swap_ab() const { return swap_ab_; }
 
     const gemmstone::CommonDriverInfo *driver_info() const {
         return &driver_info_;
@@ -102,6 +103,7 @@ protected:
     const gemmstone::kcatalog::Entry *entry_ = nullptr;
     gemmstone::EvaluateAuxOutput aux_params_;
     gemmstone::CommonDriverInfo driver_info_;
+    bool swap_ab_ = false;
 
     /* optional information to fine-tune kernel */
     int m_ = -1, n_ = -1, k_ = -1;

@@ -83,17 +83,6 @@ struct gen_t : public primitive_t {
             auto m = desc()->m();
             auto n = desc()->n();
 
-            // If m = 1, swap A/B to use more efficient n = 1 kernels if possible.
-            bool check_lda = ((d->transa() == dnnl_notrans && d->lda() == 1)
-                    || (d->transa() == dnnl_trans));
-            swap_ab_ = (d->m() == 1 && d->ldc() == 1 && check_lda)
-                    || d->transc() == dnnl_trans;
-
-            // We cannot swap A/B if we don't have kernels to support the
-            // swapped data type/alignment requirements
-            swap_ab_ &= !(utils::one_of(d->a_type(), f8_e5m2, f8_e4m3)
-                    && d->b_type() == bf16);
-
             // Pad leading dimensions in case of a single row/column.
             if ((d->k() == 1 && !trans_a()) || (m == 1 && trans_a())) {
                 lda_ = utils::rnd_up(lda_, 16);
@@ -103,7 +92,6 @@ struct gen_t : public primitive_t {
                 ldb_ = utils::rnd_up(ldb_, 16);
             }
 
-            if (swap_ab_) std::swap(m, n);
 
             // Check parameters.
             if (utils::one_of(d->c_type(), s32, f16, bf16, f32, u8, s8)
@@ -257,7 +245,6 @@ struct gen_t : public primitive_t {
             bool kernel_success = false;
             auto lda = ld(DNNL_ARG_A);
             auto ldb = ld(DNNL_ARG_B);
-            if (swap_ab_) std::swap(lda, ldb);
             auto entries = kernel_desc_.select_kernel(arch_, stepping,
                     dev_info_->eu_count(), has_systolic, is_integrated, mode,
                     problem, alpha(), beta(), m, n, d->k(), lda, ldb, d->ldc(),

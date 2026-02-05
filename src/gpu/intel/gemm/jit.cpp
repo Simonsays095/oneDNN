@@ -353,7 +353,7 @@ status_t gen_t::execute(const exec_ctx_t &ctx) const {
     const auto d = pd()->desc();
     const auto &problem = *pd()->kernel_desc()->problem();
 
-    const bool swap_ab = pd()->swap_ab();
+    const bool swap_ab = pd()->kernel_desc()->swap_ab();
 
     auto a_type = pd()->get_type(DNNL_ARG_A);
     auto b_type = pd()->get_type(DNNL_ARG_B);
