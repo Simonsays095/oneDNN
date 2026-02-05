@@ -699,30 +699,7 @@ status_t pd_t::init_GEMMProblem(
         if (problem.aqGroupK == 0) problem.aqGroupK = problem.bqGroupK;
         if (problem.bqGroupK == 0) problem.bqGroupK = problem.aqGroupK;
     }
-    if (swap_ab_) {
-        std::swap(problem.Ta, problem.Tb);
-        std::swap(problem.Ta_ext, problem.Tb_ext);
-        std::swap(problem.Tao, problem.Tbo);
-        problem.A.layout = transposeLayout(problem.A.layout);
-        problem.B.layout = transposeLayout(problem.B.layout);
-        std::swap(problem.A.alignment, problem.B.alignment);
-        std::swap(problem.aOffset, problem.bOffset);
-        std::swap(problem.aoPtrDims, problem.boPtrDims);
-        std::swap(problem.AO.alignment, problem.BO.alignment);
-        std::swap(problem.asPtrDims, problem.bsPtrDims);
-        std::swap(problem.aqGroupM, problem.bqGroupN);
-        problem.A_scale.layout = transposeLayout(problem.A_scale.layout);
-        problem.B_scale.layout = transposeLayout(problem.B_scale.layout);
-        std::swap(problem.Ta_scale, problem.Tb_scale);
-        std::swap(problem.A_scale.layout, problem.B_scale.layout);
-        std::swap(problem.A_scale.alignment, problem.B_scale.alignment);
-        problem.CO.layout = transposeLayout(problem.CO.layout);
-        std::swap(problem.sumA, problem.sumB);
-        std::swap(problem.forceGroupSumsA, problem.forceGroupSumsB);
-        std::swap(problem.Tag, problem.Tbg);
-        std::swap(problem.Ag.alignment, problem.Bg.alignment);
-        problem.postOps.transpose();
-    }
+    if (swap_ab_) problem.transpose();
     return status::success;
 }
 
