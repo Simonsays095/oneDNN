@@ -15,6 +15,7 @@
 *******************************************************************************/
 
 #include "gpu/intel/sdpa/micro.hpp"
+#include "gemmstone/strategy_parser.hpp"
 #include "gpu/intel/sdpa/configs.hpp"
 
 #include "common/c_types_map.hpp"
@@ -28,6 +29,7 @@
 #include "gpu/intel/compute/utils.hpp"
 #include "gpu/intel/gemm/jit/gen_kernel.hpp"
 #include "gpu/intel/primitive_conf.hpp"
+#include "gpu/intel/utils.hpp"
 
 #include <cstdio>
 #include <iostream>
@@ -638,9 +640,18 @@ status_t micro_params_t::get_kernel_ctx(
     reqs_vs.push_back(StrategyRequirement::WGN == config.wg_n_vs);
 
     /* Ask microkernel provider for microkernel */
+    auto kq_strat_adjuster = [&](gemmstone::GEMMStrategy &strat) {
+        std::string newStrat;
+        newStrat = gpu_utils::dev_getenv("SDPA_KQ_USTRATEGY", newStrat);
+        if (!newStrat.empty()) {
+            auto product = ngen::npack::decodeHWIPVersion(hw_info.gmdid);
+            auto hw = getCore(product.family);
+            parseStrategy(newStrat.c_str(), hw, problem_kq, strat);
+        }
+    };
     try {
-        gemm_kq = micro::selectGEMM(
-                opts_kq, hw_info, sizes_kq, problem_kq, reqs_kq);
+        gemm_kq = micro::selectGEMM(opts_kq, hw_info, sizes_kq, problem_kq,
+                reqs_kq, kq_strat_adjuster);
     } catch (const std::runtime_error &ex) {
         VCHECK_SDPA_COND(false,
                 "gemm_kq microkernel generation failure with message: %s",
@@ -648,17 +659,27 @@ status_t micro_params_t::get_kernel_ctx(
     }
 
     /* Ask microkernel provider for microkernel */
+    auto vs_strat_override = [&](gemmstone::GEMMStrategy &strat) {
+        std::string newStrat;
+        newStrat = gpu_utils::dev_getenv("SDPA_VS_USTRATEGY", newStrat);
+        if (!newStrat.empty()) {
+            auto product = ngen::npack::decodeHWIPVersion(hw_info.gmdid);
+            auto hw = getCore(product.family);
+            parseStrategy(newStrat.c_str(), hw, problem_kq, strat);
+        }
+    };
     try {
         if (use_systolic_ukernel) {
-            auto adjust_vs = [](GEMMStrategy &strategy) {
+            auto adjust_vs = [&](GEMMStrategy &strategy) {
                 /* Enable dpasw */
                 strategy.dpasw |= strategy.fused;
+                vs_strat_override(strategy);
             };
             gemm_vs = micro::selectGEMM(
                     opts_vs, hw_info, sizes_vs, problem_vs, reqs_vs, adjust_vs);
         } else {
-            gemm_vs = micro::selectGEMM(
-                    opts_vs, hw_info, sizes_vs, problem_vs, reqs_vs);
+            gemm_vs = micro::selectGEMM(opts_vs, hw_info, sizes_vs, problem_vs,
+                    reqs_vs, vs_strat_override);
         }
     } catch (const std::runtime_error &ex) {
         VCHECK_SDPA_COND(false,

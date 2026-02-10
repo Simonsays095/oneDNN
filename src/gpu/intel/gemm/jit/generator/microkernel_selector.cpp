@@ -112,7 +112,7 @@ Protocol makeProtocol(const GEMMOptions &o) {
 
 Package selectGEMM(const GEMMOptions &options, HWInformation hwInfo, SizeParams sizes,
                    const GEMMProblem &problem_, const std::vector<StrategyRequirement> &reqs_,
-                   void (*strategyAdjuster)(GEMMStrategy &strategy), SelectionObserver *observer)
+                   StrategyAdjuster strategyAdjuster, SelectionObserver *observer)
 {
     bool localA = options.localA;
     bool localB = options.localB;
