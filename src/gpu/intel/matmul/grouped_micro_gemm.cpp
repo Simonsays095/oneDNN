@@ -102,6 +102,7 @@ status_t grouped_micro_gemm_t::init_microkernels(impl::engine_t *engine) {
     opts.scaleB = !pd()->attr()->scales_.has_default_values(DNNL_ARG_SRC);
     opts.offsetB = !pd()->attr()->zero_points_.has_default_values(DNNL_ARG_SRC);
     opts.slmPtr = true;
+    opts.kParallelLocal = true;
 
     if (opts.scaleA) {
         auto wei_scales = pd()->attr()->scales_.get(DNNL_ARG_WEIGHTS);
@@ -210,8 +211,9 @@ status_t grouped_micro_gemm_t::init_microkernels(impl::engine_t *engine) {
     auto pd_ = (pd_t *)primitive_t::pd().get();
     pd_->sg_per_wg_m_ = gemm.getSetting("sg_per_wg_m");
     pd_->sg_per_wg_n_ = gemm.getSetting("sg_per_wg_n");
-    pd_->sg_tile_m_ = gemm.getSetting("sg_tile_m");
-    pd_->sg_tile_n_ = gemm.getSetting("sg_tile_n");
+    pd_->sg_per_wg_k_ = gemm.getSetting("sg_per_wg_k");
+    pd_->wg_tile_m_ = gemm.getSetting("wg_tile_m");
+    pd_->wg_tile_n_ = gemm.getSetting("wg_tile_n");
     if (gemm.grfMin > 128) pd_->use_256_grf_ = true;
 
     return status::success;
@@ -466,11 +468,18 @@ status_t grouped_micro_gemm_t::execute(const exec_ctx_t &ctx) const {
     arg_list.append(bias_data);
 
     // Use total_tokens as upper bound for M dimension
-    compute::range_t lws = {(size_t)pd_->sg_per_wg_m_ * pd_->sg_size_,
-            (size_t)pd_->sg_per_wg_n_, 1};
-    compute::range_t gws = {utils::div_up(n, lws[0]) * lws[0],
-            utils::div_up(m_all, lws[1] * pd_->sg_tile_n_) * lws[1],
-            num_groups};
+    compute::range_t lws = compute::range_t::one(3);
+    lws[0] *= pd_->sg_size_;
+
+    lws[0] *= pd_->sg_per_wg_m_;
+    lws[1] *= pd_->sg_per_wg_n_;
+    lws[2] *= pd_->sg_per_wg_k_;
+
+    compute::range_t gws = lws;
+    // Swap wg_tile_[mn]_ for col-major vs row-major representations
+    gws[0] *= utils::div_up(n, pd_->wg_tile_m_);
+    gws[1] *= utils::div_up(m_all, pd_->wg_tile_n_);
+    gws[2] *= num_groups;
     //std::cout << "LWS: " << lws.str() << std::endl;
     //std::cout << "GWS: " << gws.str() << std::endl;
 

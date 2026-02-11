@@ -73,8 +73,9 @@ struct grouped_micro_gemm_t : public primitive_t {
         bool use_256_grf_ = false;
         dim_t sg_per_wg_m_ = 0;
         dim_t sg_per_wg_n_ = 0;
-        dim_t sg_tile_m_ = 0;
-        dim_t sg_tile_n_ = 0;
+        dim_t sg_per_wg_k_ = 0;
+        dim_t wg_tile_m_ = 0;
+        dim_t wg_tile_n_ = 0;
         dim_t ngroups_ = 0;
         std::array<dim_t, 2> src_group_sizes_ = {0, 0};
         std::array<dim_t, 3> wei_group_sizes_ = {0, 0, 0};
