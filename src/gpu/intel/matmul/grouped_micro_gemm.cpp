@@ -20,6 +20,7 @@
 
 #include "gemmstone/microkernel/shim.hpp"
 #include "gemmstone/microkernel_selector.hpp"
+#include "gemmstone/strategy_parser.hpp"
 #include "gpu/intel/compute/ukernels.hpp"
 #include "gpu/intel/compute/utils.hpp"
 #include "gpu/intel/gemm/jit/gen_kernel.hpp"
@@ -170,9 +171,29 @@ status_t grouped_micro_gemm_t::init_microkernels(impl::engine_t *engine) {
     sizes.n = static_cast<uint16_t>(m);
     sizes.k = static_cast<uint16_t>(k);
 
+
+    auto strat_override = [&](gemmstone::GEMMStrategy &strat) {
+        std::string newStrat;
+        newStrat = gpu_utils::dev_getenv("GRP_GEMM_USTRATEGY", newStrat);
+        if (!newStrat.empty()) {
+            // Example: 16 16 aT32 aM32 aB wg 2x4 sys
+            auto product = ngen::npack::decodeHWIPVersion(hw_info.gmdid);
+            auto hw = getCore(product.family);
+            auto stepping = hw_info.gmdid & 0xFF;
+            strat = gemmstone::GEMMStrategy(hw, stepping);
+            std::stringstream ss(newStrat);
+            ss >> strat.unroll[0];
+            ss >> strat.unroll[1];
+            std::string strategyString;
+            std::getline(ss >> std::ws, strategyString);
+            parseStrategy(strategyString.c_str(), hw, problem, strat);
+            adjustStrategy(hw, problem, strat);
+        }
+    };
+
     Package gemm;
     try {
-        gemm = microkernel::selectGEMM(opts, hw_info, sizes, problem);
+        gemm = microkernel::selectGEMM(opts, hw_info, sizes, problem, {}, strat_override);
     } catch (const std::runtime_error &ex) {
         std::vector<StrategyRequirement> reqs;
         reqs.push_back(StrategyRequirement::UnrollM == 16);
@@ -183,7 +204,7 @@ status_t grouped_micro_gemm_t::init_microkernels(impl::engine_t *engine) {
                 == utils::rnd_up_pow2(std::max<int>(
                         2, std::min<int>(pd()->M() / reqs[1].value, 8))));
         try {
-            gemm = selectGEMM(opts, hw_info, sizes, problem, reqs);
+            gemm = selectGEMM(opts, hw_info, sizes, problem, reqs, strat_override);
         } catch (const std::runtime_error &ex) {
             //CHECK_BOOL(false,
             //         "gemm microkernel generation failure with message: %s",
