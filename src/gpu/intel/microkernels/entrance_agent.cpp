@@ -17,6 +17,7 @@
 #include "entrance_agent.hpp"
 
 #include <array>
+#include <iostream>
 
 #include "ngen_decoder.hpp"
 #include "npack/neo_packager.hpp"
@@ -50,6 +51,10 @@ EntranceAgent::Status EntranceAgent::scan(Package &package) {
 
         // Get destination region and add to clobbers.
         if (decoder.getOperandRegion(dstRegion, -1)) {
+            std::cout << "instruction " << decoder.index()
+                      << ": unspecified=" << dstRegion.unspecified
+                      << ", base=" << dstRegion.base
+                      << ", size=" << dstRegion.size << std::endl;
             if (dstRegion.unspecified) {
                 // Indirect destination -- cannot reliably detect clobbers.
                 status = Status::UncertainClobbers;

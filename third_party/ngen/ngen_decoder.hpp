@@ -51,8 +51,9 @@ public:
     Decoder(HW hw_, const uint8_t *program, size_t bytes)
         : hw(hw_), current(program), end(program + bytes) {}
 
-    void advance()    { checkCompaction(); current += 0x10; }
+    void advance()    { checkCompaction(); current += 0x10; idx++; }
     bool done() const { return current >= end; }
+    int index() const { return idx; }
 
     Opcode opcode() const { return static_cast<Opcode>(*current & 0x7F); }
     inline bool getOperandRegion(autoswsb::DependencyRegion &region, int opNum) const;
@@ -60,6 +61,7 @@ public:
 protected:
     HW hw;
     const uint8_t *current, *end;
+    int idx = 0;
 
     void checkCompaction() const {
 #ifdef NGEN_SAFE
