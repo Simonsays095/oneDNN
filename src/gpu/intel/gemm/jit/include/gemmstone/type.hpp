@@ -106,9 +106,14 @@ public:
     static constexpr ngen::DataType ngen_nf4()  { return static_cast<ngen::DataType>(0x58); }
     static constexpr ngen::DataType ngen_e8m0() { return static_cast<ngen::DataType>(0x79); }
 
+#if XE3P
+    static  constexpr  ngen::DataType ngen_e2m1() { return  ngen::DataType::e2m1; }
+    static  constexpr  ngen::DataType ngen_e3m0() { return  ngen::DataType::e3m0; }
+#else
     // Not a valid nGEN DataType; for gemmstone internal use only
     static constexpr ngen::DataType ngen_e2m1() { return static_cast<ngen::DataType>(0x5A);}
     static constexpr ngen::DataType ngen_e3m0() { return static_cast<ngen::DataType>(0x5B);}
+#endif
 
 
     ngen::DataType ngen() const

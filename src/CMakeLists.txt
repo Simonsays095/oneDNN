@@ -125,6 +125,13 @@ if(UNIX)
     endif()
 endif()
 
+# TODO: Remove these after the next pull-down from main.
+if(DNNL_WITH_XE3P)
+add_definitions_with_host_compiler(-DDNNL_WITH_XE3P)
+add_definitions_with_host_compiler(-DPRERELEASE_HW)
+add_definitions_with_host_compiler(-DXE3P)
+endif()
+
 add_subdirectory(common)
 
 if(NOT DNNL_CPU_RUNTIME STREQUAL "NONE")

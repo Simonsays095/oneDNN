@@ -273,6 +273,9 @@ const std::vector<const kcatalog::Entry *> select(const kcatalog::Catalog &catal
         switch (hw) {
             case HWTagXe2:  hw = HWTagXeHPC; break;
             case HWTagXe3:  hw = HWTagXe2; break;
+#if XE3P
+	        case HWTagXe3p: hw = HWTagXe3; break;
+#endif
             default:        hw = 0; break;
         }
     } while (hw);

@@ -1009,6 +1009,12 @@ REG_XEHPG_ISA(template struct eltwise_injector_f32_t<code_gen<gpu_xe_hpg>>);
 REG_XEHPC_ISA(template struct eltwise_injector_f32_t<code_gen<gpu_xe_hpc>>);
 REG_XE2_ISA(template struct eltwise_injector_f32_t<code_gen<gpu_xe2>>);
 REG_XE3_ISA(template struct eltwise_injector_f32_t<code_gen<gpu_xe3>>);
+#if XE3P
+REG_XE3P_ISA(template struct eltwise_injector_f32_t<code_gen<gpu_xe3p_35_10>>);
+REG_XE3P_ISA(template struct eltwise_injector_f32_t<code_gen<gpu_xe3p_35_11>>);
+REG_XE3P_ISA(
+        template struct eltwise_injector_f32_t<code_gen<gpu_xe3p_35_unknown>>);
+#endif
 
 #ifdef NGEN_ASM
 template struct eltwise_injector_f32_t<ngen::AsmCodeGenerator>;

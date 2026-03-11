@@ -220,6 +220,18 @@ status_t gen_desc_t::finalize(const char *tags) {
             problem_.B.setAlignment(nstl::max<int>(problem_.B.alignment, 16));
     }
 
+#if XE3P
+    if (false && utils::one_of(hw_, ngen::HW::XE3P_35_10, ngen::HW::XE3P_35_11,
+                ngen::HW::XE3P_UNKNOWN)) {
+        // Use XeHPC banking if reusing XeHPC strategies (legacy mode)
+        if (!efficient_64b_) strategy_.raHW = ngen::HW::XeHPC;
+
+        // Disable named barriers to avoid simulator errors, allow fallback to pvc strategies.
+        strategy_.namedBarriers[0] = 0;
+        strategy_.namedBarriers[1] = 0;
+    }
+#endif
+
     // Disable global k parallelization if it wouldn't be used.
     if (strategy_.kParallel && k_ >= 0) {
         auto k_min = aux_params_.k0 * aux_params_.wgK;
@@ -352,6 +364,11 @@ void gen_desc_t::update_driver_info() {
         REG_XEHPC_ISA(ARCH_DISPATCH(XeHPC))
         REG_XE2_ISA(ARCH_DISPATCH(Xe2))
         REG_XE3_ISA(ARCH_DISPATCH(Xe3))
+#if XE3P
+        REG_XE3P_ISA(ARCH_DISPATCH(XE3P_35_10))
+        REG_XE3P_ISA(ARCH_DISPATCH(XE3P_35_11))
+        REG_XE3P_ISA(ARCH_DISPATCH(XE3P_UNKNOWN))
+#endif
         default:
             assert(!"Unsupported architecture");
             driver_info_ = entry_->driverInfo;
@@ -595,6 +612,13 @@ gen_nocopy_desc_t::select_kernel(compute::gpu_arch_t arch, int stepping,
     // Select a kernel from the catalog.
     std::vector<MatchParams> match_params;
     MatchParams base(hw_, has_systolic, is_integrated, problem_);
+#if XE3P
+    /* Reuse PVC strategies for legacy mode on Xe3p */
+    if (false && utils::one_of(hw_, ngen::HW::XE3P_35_10, ngen::HW::XE3P_35_11,
+                ngen::HW::XE3P_UNKNOWN)
+            && !efficient_64b_)
+        base.selector.hw = kcatalog::HWTagXeHPC;
+#endif
 
     // By default gemmstone assumes that the accumulation type must be at least
     // as wide as the output type. For oneDNN this restriction is not needed.
@@ -933,6 +957,11 @@ void gen_xe_systolic_kernel_desc_t::choose_unrolls(compute::gpu_arch_t arch,
         case compute::gpu_arch_t::xe_hpc:
         case compute::gpu_arch_t::xe2:
         case compute::gpu_arch_t::xe3:
+#if XE3P
+        case compute::gpu_arch_t::xe3p_35_10:
+        case compute::gpu_arch_t::xe3p_35_11:
+        case compute::gpu_arch_t::xe3p_35_unknown:
+#endif
             if (utils::one_of(a_type, f16, bf16)) {
                 if (unroll_m != 0)
                     unroll_n = (unroll_m > 16) ? 32 : 16;
@@ -1123,6 +1152,9 @@ void gen_kernel_t::init_interface() {
 
     if (desc()->hw_ >= HW::XeHPG) interface_.allowArgumentRearrangement(false);
     interface_.externalName(kernel_name());
+#if XE3P
+    interface_.setEfficient64Bit(desc_.efficient_64b_);
+#endif
 }
 
 dsl::kernel_t get_dsl_kernel(const GEMMProblem &problem,
@@ -1172,6 +1204,11 @@ status_t gen_kernel_t::get_kernel(
             REG_XEHPC_ISA(ARCH_DISPATCH(XeHPC))
             REG_XE2_ISA(ARCH_DISPATCH(Xe2))
             REG_XE3_ISA(ARCH_DISPATCH(Xe3))
+#if XE3P
+            REG_XE3P_ISA(ARCH_DISPATCH(XE3P_35_10))
+            REG_XE3P_ISA(ARCH_DISPATCH(XE3P_35_11))
+            REG_XE3P_ISA(ARCH_DISPATCH(XE3P_UNKNOWN))
+#endif
             default: assert(!"Unsupported architecture"); break;
         }
     } catch (const std::runtime_error &err) {

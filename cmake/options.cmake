@@ -151,7 +151,7 @@ set(DNNL_ENABLE_PRIMITIVE_GPU_ISA "ALL" CACHE STRING
     implementations will always be available. Valid values:
     - ALL (the default). Includes all ISA to be enabled.
     - <ISA_NAME>;<ISA_NAME>;... Includes only selected ISA to be enabled.
-      Possible values are: XELP, XEHP, XEHPG, XEHPC, XE2, XE3.")
+      Possible values are: XELP, XEHP, XEHPG, XEHPC, XE2, XE3, XE3P.")
 
 set(ONEDNN_ENABLE_GEMM_KERNELS_ISA "ALL" CACHE STRING
     "Specifies an ISA set of GeMM kernels residing in x64/gemm folder to be
@@ -421,3 +421,10 @@ option(DNNL_AARCH64_USE_ACL "Enables use of AArch64 optimised functions
     This is only supported on AArch64 builds and assumes there is a
     functioning Compute Library build available at the location specified by the
     environment variable ACL_ROOT_DIR." OFF)
+
+# ======================
+# Prerelease GPU Support
+# ======================
+
+option(DNNL_WITH_XE3P "Enables support for prerelease Xe3p GPU platform" TRUE)
+option(DNNL_WITH_XE3 "Enables support for prerelease Xe3 GPU platform" TRUE)

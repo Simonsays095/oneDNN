@@ -138,6 +138,7 @@ public:
     template <typename T>
     Subregister allocSub(Bundle bundle = Bundle()) { return allocSub(getDataType<T>(), bundle); }
 
+
     // Allocate flag registers.
     //   sub = true (default):  a 16-bit subregister   (fX.Y:uw)
     //   sub = false:           a full 32-bit register (fX.0:ud)
@@ -151,6 +152,7 @@ public:
     inline Subregister tryAllocSub(DataType type, Bundle bundle = Bundle());
     template <typename T>
     Subregister tryAllocSub(Bundle bundle = Bundle()) { return tryAllocSub(getDataType<T>(), bundle); }
+
 
     inline FlagRegister tryAllocFlag(bool sub = true);
 
@@ -169,15 +171,18 @@ public:
     inline void claim(Subregister subreg);
     inline void claim(FlagRegister flag);
 
+
     // Set register count.
     inline void setRegisterCount(int rcount);
     inline int getRegisterCount() const { return regCount; }
     inline int countAllocedRegisters() const;
 
+
     // Check availability.
     inline bool isFree(GRF reg) const;
     inline bool isFree(GRFRange range) const;
     inline bool isFree(Subregister subreg) const;
+
 
 #ifdef NGEN_ASM
     inline void dump(std::ostream &str);
@@ -199,6 +204,7 @@ public:
     Subregister try_alloc_sub(Bundle bundle = Bundle())                       { return tryAllocSub(getDataType<T>(), bundle); }
     FlagRegister try_alloc_flag(bool sub = true)                              { return tryAllocFlag(sub); }
 
+
 protected:
 
     using mtype = uint16_t;
@@ -209,6 +215,7 @@ protected:
     uint16_t regCount;                          // # of registers.
     uint8_t freeFlag;                           // Bitmap of free flag registers.
     mtype fullSubMask;
+
 
     inline void init();
     inline void claimSub(int r, int o, int dw);
@@ -242,6 +249,11 @@ int Bundle::firstReg(HW hw) const
         case HW::XeHPC:
         case HW::Xe2:
         case HW::Xe3:
+#if XE3P
+        case HW::XE3P_35_10:
+        case HW::XE3P_35_11:
+        case HW::XE3P_UNKNOWN:
+#endif
             return (bundle0 << 1) | bank0;
         case HW::XeHP:
         case HW::XeHPG:
@@ -278,6 +290,11 @@ int Bundle::stride(HW hw) const
         case HW::Gen12LP:
         case HW::Xe2:
         case HW::Xe3:
+#if XE3P
+        case HW::XE3P_35_10:
+        case HW::XE3P_35_11:
+        case HW::XE3P_UNKNOWN:
+#endif
             return 16;
         case HW::XeHP:
         case HW::XeHPG:
@@ -308,6 +325,11 @@ uint64_t Bundle::regMask(HW hw, int offset) const
         case HW::Gen12LP:
         case HW::Xe2:
         case HW::Xe3:
+#if XE3P
+        case HW::XE3P_35_10:
+        case HW::XE3P_35_11:
+        case HW::XE3P_UNKNOWN:
+#endif
             if (bundle_id != any)                           base_mask  = 0x0003000300030003;
             if (bank_id != any)                             base_mask &= 0x5555555555555555;
             return base_mask << (bank0 + (bundle0 << 1));
@@ -338,6 +360,11 @@ Bundle Bundle::locate(HW hw, RegData reg)
         case HW::Gen12LP:
         case HW::Xe2:
         case HW::Xe3:
+#if XE3P
+        case HW::XE3P_35_10:
+        case HW::XE3P_35_11:
+        case HW::XE3P_UNKNOWN:
+#endif
             return Bundle(base & 1, (base >> 1) & 7);
         case HW::XeHP:
         case HW::XeHPG:
@@ -368,6 +395,10 @@ void RegisterAllocator::init()
 
     if (hw < HW::XeHP)
         setRegisterCount(128);
+#if XE3P
+    else if (hw < HW::XE3P_35_10)
+        setRegisterCount(256);
+#endif
 
 }
 
@@ -400,6 +431,7 @@ void RegisterAllocator::claimSub(int r, int o, int dw)
     freeGRF[r >> 3] &= ~(1 << (r & 7));
 }
 
+
 void RegisterAllocator::claim(FlagRegister flag)
 {
     freeFlag &= ~(1 << flag.index());
@@ -424,6 +456,7 @@ void RegisterAllocator::setRegisterCount(int rcount)
     }
     regCount = rcount;
 }
+
 
 int RegisterAllocator::countAllocedRegisters() const
 {
@@ -456,10 +489,12 @@ void RegisterAllocator::release(Subregister subreg) {
     int dw = subreg.getDwords();
     int o = (subreg.getByteOffset()) >> 2;
 
+
     freeSub[r] |= (1 << (o + dw)) - (1 << o);
     if (freeSub[r] == fullSubMask)
         freeGRF[r >> 3] |= (1 << (r & 7));
 }
+
 
 void RegisterAllocator::release(FlagRegister flag)
 {
@@ -495,6 +530,7 @@ bool RegisterAllocator::isFree(Subregister subreg) const
     return (~freeSub[r] & m) == 0;
 }
 
+
 // -------------------------------------------
 //  High-level register allocation functions.
 // -------------------------------------------
@@ -515,6 +551,7 @@ Subregister RegisterAllocator::allocSub(DataType type, Bundle bundle)
     return result;
 }
 
+
 FlagRegister RegisterAllocator::allocFlag(bool sub)
 {
     auto result = tryAllocFlag(sub);
@@ -522,6 +559,7 @@ FlagRegister RegisterAllocator::allocFlag(bool sub)
         throw out_of_registers_exception();
     return result;
 }
+
 
 GRFRange RegisterAllocator::tryAllocRange(int nregs, Bundle baseBundle, BundleGroup bundleMask)
 {
@@ -533,6 +571,7 @@ GRFRange RegisterAllocator::tryAllocRange(int nregs, Bundle baseBundle, BundleGr
 
     for (int rchunk = 0; rchunk < (GRF::maxRegs() >> 6); rchunk++) {
         uint64_t baseMask = baseBundle.regMask(hw, rchunk);
+
 
         uint64_t free = freeGRF64[rchunk] & bundleMask.regMask(rchunk);
         uint64_t freeBase = free & baseMask;
@@ -591,11 +630,21 @@ Subregister RegisterAllocator::tryAllocSub(DataType type, Bundle bundle)
     int dwords = getDwords(type);
     int rAlloc = 0, oAlloc = 0;
 
+
     auto findAllocSub = [&,bundle,dwords](bool searchFullGRF) -> bool {
         static const uint16_t alloc_patterns[4] = {0b1111111111111111, 0b0101010101010101, 0, 0b0001000100010001};
         auto alloc_pattern = alloc_patterns[(dwords - 1) & 3];
         uint64_t freeGRF64[sizeof(freeGRF) / sizeof(uint64_t)];
         std::memcpy(freeGRF64, freeGRF, sizeof(freeGRF));
+
+#if XE3P
+        /* Preferentially use r511 for small allocations as it can't be used in sendgx. */
+        if (searchFullGRF && freeSub[511] == fullSubMask) {
+            rAlloc = 511;
+            oAlloc = 0;
+            return true;
+        }
+#endif
 
         for (int rchunk = 0; rchunk < (GRF::maxRegs() >> 6); rchunk++) {
             uint64_t free = searchFullGRF ? freeGRF64[rchunk] : -1;
@@ -637,9 +686,11 @@ Subregister RegisterAllocator::tryAllocSub(DataType type, Bundle bundle)
     return Subregister(GRF(rAlloc), (oAlloc << 2) / getBytes(type), type);
 }
 
+
 FlagRegister RegisterAllocator::tryAllocFlag(bool sub)
 {
     if (!freeFlag) return FlagRegister();
+
 
     if (sub) {
         int idx = utils::bsf(freeFlag);
@@ -692,6 +743,7 @@ void RegisterAllocator::dump(std::ostream &str)
             str << std::endl;
         }
     }
+
 
     str << std::endl;
 }

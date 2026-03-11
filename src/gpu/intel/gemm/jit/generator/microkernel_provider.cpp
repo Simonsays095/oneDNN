@@ -240,6 +240,11 @@ Package selectGEMMMicrokernel(GEMMProtocol protocol, HWInformation hwInfo, SizeP
         REG_XEHPC_ISA(ARCH_DISPATCH(XeHPC))
         REG_XE2_ISA(ARCH_DISPATCH(Xe2))
         REG_XE3_ISA(ARCH_DISPATCH(Xe3))
+#if XE3P
+        REG_XE3_ISA(ARCH_DISPATCH(XE3P_35_10))
+        REG_XE3_ISA(ARCH_DISPATCH(XE3P_35_11))
+        REG_XE3_ISA(ARCH_DISPATCH(XE3P_UNKNOWN))
+#endif
         default: throw std::runtime_error("Unsupported architecture");
     }
 #undef ARCH_DISPATCH

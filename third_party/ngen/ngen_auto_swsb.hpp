@@ -116,7 +116,11 @@ public:
 };
 
 struct DependencyRegion {
+#if XE3P
+    uint16_t base, size;
+#else
     uint8_t base, size;
+#endif
     uint8_t unspecified : 1;
     uint8_t checkWAW : 1;
     uint8_t rf : 2;
@@ -142,6 +146,14 @@ struct DependencyRegion {
         return true;
     }
     void clear()        { *this = DependencyRegion(hw); unspecified = false; checkWAW = false; rf = 0; }
+
+#if XE3P
+    void duplicateLH() {
+        for (int i = 0; i < size; i++)
+            masks[size + i] = masks[i];
+        size *= 2;
+    }
+#endif
 
 #ifdef NGEN_DEBUG
     inline void dump() const;
@@ -218,7 +230,11 @@ class DependencyTable {
     };
 
     enum : int {
+#if XE3P
+        maxGRF = 512,
+#else
         maxGRF = 256,
+#endif
         grfListIdxUnspecified = maxGRF      // GRF list index for all unspecified regions.
     };
 
@@ -232,7 +248,11 @@ class DependencyTable {
 
     std::vector<Dependency<consumer>> deps;         // List of all Dependencies (active or not)
     std::vector<DependencyFragment> frags;          // List of all DependencyFragments (active or not)
+#if XE3P
+    std::array<uint32_t, 512+1> heads[NListTypes];  // Heads of doubly-linked lists.
+#else
     std::array<uint32_t, 257> heads[NListTypes];    // Heads of doubly-linked lists.
+#endif
 
     static bool isHeadLink(uint32_t id)         { return ((id & 0x80000000) != 0) && (id != none); }
     static uint32_t readHeadLink(uint32_t id)   { return id & 0x7FFFFFFF; }
@@ -339,6 +359,7 @@ inline GeneralizedPipe getPipe(HW hw, const Instruction &insn, bool checkOOO = t
 {
     auto op = insn.opcode();
 
+
     // Check jumps and no-ops
     if (isBranch(op) || op == Opcode::nop_gen12 || op == Opcode::sync || op == Opcode::illegal || op == Opcode::directive)
         return GeneralizedPipe();
@@ -348,6 +369,9 @@ inline GeneralizedPipe getPipe(HW hw, const Instruction &insn, bool checkOOO = t
         if (!checkOOO)
             return GeneralizedPipe();
         switch (op) {
+#if XE3P
+            case Opcode::bdpas:
+#endif
             case Opcode::dpas:
             case Opcode::dpasw:
                 return GeneralizedPipe::Systolic();
@@ -356,6 +380,12 @@ inline GeneralizedPipe getPipe(HW hw, const Instruction &insn, bool checkOOO = t
                 return GeneralizedPipe::Math();
             case Opcode::send:
             case Opcode::sendc:
+#if XE3P
+            case Opcode::sendg:
+            case Opcode::sendgc:
+            case Opcode::sendgx:
+            case Opcode::sendgxc:
+#endif
                 return GeneralizedPipe(insn.sfid());
         }
     }
@@ -375,6 +405,10 @@ inline GeneralizedPipe getPipe(HW hw, const Instruction &insn, bool checkOOO = t
     unsigned lmask = (hw >= HW::XeHPC) ? 0b1011 : 0b0011;
     if ((dt & lmask) == lmask)
         mask = PipeMaskL;
+#if XE3P
+    else if ((hw >= HW::XE3P_35_10) && (op == Opcode::mov_gen12 || op == Opcode::srnd) && (dt != insn.src0Typecode()))
+        mask = PipeMaskI;
+#endif
     else if (dt & 8)
         mask = PipeMaskF;
     else
@@ -464,6 +498,7 @@ DependencyRegion::DependencyRegion(HW hw_, int esize, RegData rr)
     unspecified = false;
     checkWAW = false;
     rf = rr.getRegFile();
+
 
     int hs = rr.getHS(), vs = rr.getVS();
     int nh = rr.getWidth();
@@ -598,7 +633,7 @@ inline bool bboxContains(const DependencyRegion &dep1, const DependencyRegion &d
 // Check if an ARF type needs SWSB tracking.
 inline bool trackableARF(ARFType type)
 {
-    return (type == ARFType::acc || type == ARFType::a || type == ARFType::s || type == ARFType::f);
+    return (type == ARFType::acc || type == ARFType::a || type == ARFType::s);
 }
 
 // Distance in an in-order pipe after which a dependency can be ignored.
@@ -622,8 +657,17 @@ inline int estimateLatency(HW hw, const Instruction &insn)
     switch (insn.opcode()) {
         default:
         case Opcode::math: return (hw == HW::Gen12LP) ? 20 : 17;
+#if XE3P
+        case Opcode::bdpas:
+#endif
         case Opcode::dpas:
         case Opcode::dpasw: return 20;   // need correct value
+#if XE3P
+        case Opcode::sendg:
+        case Opcode::sendgc:
+        case Opcode::sendgx:
+        case Opcode::sendgxc:
+#endif
         case Opcode::send:
         case Opcode::sendc: {
             switch (insn.sfid()) {
@@ -1794,7 +1838,7 @@ PVCWARWA analyzePVCWARWA(HW hw, Program &program, BasicBlock &bb, int phase,
     }
 
     // Case 2: walk forward, looking for a new target send instruction.
-    auto eligibleSend = [=, &program, &dep](uint32_t inum) {
+    auto eligibleSend = [=, &program](uint32_t inum) {
         auto &insn = program[inum];
         if (inum != dep.inum && insn.predicated())
             return false;
@@ -1871,7 +1915,6 @@ inline void analyze(HW hw, int tokens, Program &program, BasicBlock &bb, int pha
     std::array<int32_t, NPipes> counters;
     std::vector<Producer> depList, depListIncoming, chainProducers, pvcWARWADeps;
     std::vector<std::pair<bool, const DependencyRegion*>> depOperands;
-    DependencyRegion cmodDepRegion(hw);
 
     auto allTokens = uint32_t((uint64_t(1) << tokens) - 1);
 
@@ -2078,10 +2121,6 @@ inline void analyze(HW hw, int tokens, Program &program, BasicBlock &bb, int pha
                 bool rw = (srcN < 0);
                 depOperands.push_back(std::make_pair(rw, &regions[srcN + 1]));
             }
-
-            // Handle HW bug with cross-pipe flag register dependencies.
-            if (hw >= HW::XeHPC && insn.getCModDepRegion(cmodDepRegion))
-                depOperands.push_back(std::make_pair(true, &cmodDepRegion));
 
             // Handle PVC HW bug with WAR dependencies on send instructions.
             auto pww = analyzePVCWARWA(hw, program, bb, phase, consumeOp, pvcWARWADeps);
@@ -2394,6 +2433,15 @@ inline void analyze(HW hw, int tokens, Program &program, BasicBlock &bb, int pha
 
         // First pass: record pipeline SWSB dependencies for later entry into consumer table.
         recordIOPreconsumes(generated);
+
+#if XE3P
+        // mullh takes up two execution slots. Consume dependencies on the first;
+        //  (already done); produce them on the second (up next).
+        if (opcode == Opcode::mullh) {
+            incrementCounters(getPipeMask(hw, insn));
+            consumeOp.counters = counters;
+        }
+#endif
 
         // Add producer dependencies for all operands.
         // Also record token timeout.

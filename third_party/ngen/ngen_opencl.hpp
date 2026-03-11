@@ -115,6 +115,10 @@ public:
     static inline Product detectHWInfo(cl_device_id device);
     static inline Product detectHWInfo(cl_context context, cl_device_id device);
 
+#if XE3P
+    static inline bool detectEfficient64Bit(cl_context context, cl_device_id device, HW inHW = HW::Unknown);
+#endif
+
 private:
     bool isZebin = false;
     inline std::vector<uint8_t> getPatchTokenBinary(cl_context context, cl_device_id device, const std::vector<uint8_t> *code = nullptr, const std::string &options = "-cl-std=CL2.0");
@@ -350,6 +354,20 @@ Product OpenCLCodeGenerator<hw>::detectHWInfo(cl_context context, cl_device_id d
 
     return product;
 }
+
+#if XE3P
+template <HW hw>
+bool OpenCLCodeGenerator<hw>::detectEfficient64Bit(cl_context context, cl_device_id device, HW inHW)
+{
+    const char *dummyCL = "kernel void _ngen_eff64b_detect(){}";
+
+    if (inHW == HW::Unknown) inHW = hw;
+    if (inHW < HW::XE3P_35_10) return false;
+
+    auto binary = detail::getOpenCLCProgramBinary(context, device, dummyCL, "");
+    return npack::isBinaryEfficient64Bit(binary, inHW);
+}
+#endif
 
 } /* namespace NGEN_NAMESPACE */
 

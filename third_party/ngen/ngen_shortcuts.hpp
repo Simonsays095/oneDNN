@@ -18,6 +18,7 @@
  * Do not #include this file directly; ngen uses it internally.
  */
 
+
     template <typename DT = void> void add(const RegData &dst, const RegData &src0, const RegData &src1, SourceLocation loc = {}) {
         add<DT>(defaultMods(), dst, src0, src1, loc);
     }
@@ -181,6 +182,14 @@
     template <typename DT = void> void mul(const RegData &dst, const RegData &src0, const Immediate &src1, SourceLocation loc = {}) {
         mul<DT>(defaultMods(), dst, src0, src1, loc);
     }
+#if XE3P
+    template <typename DT = void> void mullh(const RegData &dst, const RegData &src0, const RegData &src1, SourceLocation loc = {}) {
+        mullh<DT>(defaultMods(), dst, src0, src1, loc);
+    }
+    template <typename DT = void> void mullh(const RegData &dst, const RegData &src0, const Immediate &src1, SourceLocation loc = {}) {
+        mullh<DT>(defaultMods(), dst, src0, src1, loc);
+    }
+#endif
     template <typename DT = void> void not_(const RegData &dst, const RegData &src0, SourceLocation loc = {}) {
         not_<DT>(defaultMods(), dst, src0, loc);
     }

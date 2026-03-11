@@ -242,6 +242,9 @@ struct gen_t : public primitive_t {
             // Check GPU architecture.
             bool arch_ok = utils::one_of(arch_, arch_t::xe_lp, arch_t::xe_hp,
                     arch_t::xe_hpg, arch_t::xe_hpc, arch_t::xe2, arch_t::xe3);
+#if XE3P
+            arch_ok |= (arch_ >= arch_t::xe3p_35_10);
+#endif
 
             VDISPATCH_GEMM(arch_ok, VERBOSE_UNSUPPORTED_ARCH, "gpu");
             VDISPATCH_GEMM(IMPLICATION(with_binary, arch_ >= arch_t::xe_hp),
@@ -262,7 +265,7 @@ struct gen_t : public primitive_t {
                     || intel_engine->mayiuse(compute::device_ext_t::
                                     intel_subgroup_split_matrix_multiply_accumulate);
 
-            bool is_integrated = intel_engine->device_info()->is_integrated();
+            bool is_integrated = dev_info_->is_integrated();
 
             // Size checks for fused reduction kernels.
             if (with_sum_ab()) {
@@ -359,6 +362,11 @@ struct gen_t : public primitive_t {
             jit::quant_params b_quant = {b_scales_type_, bo_type, bg_type,
                     bsc_dims_, bo_dims_, bg_dims_, b_q2d_group_k(),
                     b_q2d_group_n(), has_gs(DNNL_ARG_B)};
+
+#if XE3P
+            if (arch_ >= arch_t::xe3p_35_10)
+                kernel_desc_.set_efficient_64b(dev_info_->is_efficient_64bit());
+#endif
 
             bool print_verbose = get_verbose(verbose_t::debuginfo) >= 5;
             bool kernel_success = false;
