@@ -304,6 +304,8 @@ static inline constexpr14 BinaryOperand8 encodeBinaryOperand8(const RegData &rd)
 
 #ifdef NGEN_SAFE
     if (rd.isInvalid()) throw invalid_object_exception();
+    if (!rd.isIndirect() && rd.getBase() > 255)
+        throw invalid_operand_exception();
 #endif
 
     if (rd.isIndirect()) {
@@ -344,6 +346,8 @@ static inline constexpr14 BinaryOperand8 encodeBinaryOperand8(const ExtendedReg 
 #ifdef NGEN_SAFE
     if (reg.isInvalid()) throw invalid_object_exception();
     if (reg.isIndirect()) throw invalid_operand_exception();
+    if (reg.getBase().getBase() > 255)
+        throw invalid_operand_exception();
 #endif
 
     RegData rd = reg.getBase();
@@ -374,6 +378,8 @@ static inline constexpr14 BinaryOperand8 encodeBinaryOperand8(const Align16Opera
 
 #ifdef NGEN_SAFE
     if (op.isInvalid()) throw invalid_object_exception();
+    if (!rd.isIndirect() && rd.getBase() > 255)
+        throw invalid_operand_exception();
 #endif
 
     if (op.getReg().isIndirect()) {
@@ -405,6 +411,8 @@ static inline constexpr14 TernaryOperand8 encodeTernarySrcOperand8(const RegData
 #ifdef NGEN_SAFE
     if (rd.isInvalid()) throw invalid_object_exception();
     if (rd.isIndirect()) throw invalid_operand_exception();
+    if (rd.getBase() > 255)
+        throw invalid_operand_exception();
 #endif
 
     TernaryOperand8 result{0};
@@ -425,6 +433,8 @@ static inline constexpr14 TernaryOperand8 encodeTernarySrcOperand8(const Extende
 #ifdef NGEN_SAFE
     if (reg.isInvalid()) throw invalid_object_exception();
     if (reg.isIndirect()) throw invalid_operand_exception();
+    if (reg.getBase().getBase() > 255)
+        throw invalid_operand_exception();
 #endif
 
     TernaryOperand8 result{0};
@@ -447,6 +457,8 @@ static inline constexpr14 TernaryOperand8 encodeTernarySrcOperand8(const Align16
 #ifdef NGEN_SAFE
     if (rd.getReg().isInvalid()) throw invalid_object_exception();
     if (rd.isIndirect()) throw invalid_operand_exception();
+    if (rd.getReg().getBase() > 255)
+        throw invalid_operand_exception();
 #endif
 
     TernaryOperand8 result{0};

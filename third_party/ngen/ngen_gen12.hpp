@@ -679,6 +679,8 @@ static inline constexpr14 BinaryOperand12 encodeBinaryOperand12(const RegData &r
 
 #ifdef NGEN_SAFE
     if (rd.isInvalid()) throw invalid_object_exception();
+    if (!rd.isIndirect() && rd.getBase() > 255)
+        throw invalid_operand_exception();
 #endif
 
     if (rd.isIndirect()) {
@@ -711,6 +713,8 @@ static inline constexpr14 BinaryOperand12 encodeBinaryOperand12(const RegData &r
 
 #ifdef NGEN_SAFE
     if (rd.isInvalid()) throw invalid_object_exception();
+    if (!rd.isIndirect() && rd.getBase() > 255)
+        throw invalid_operand_exception();
 #endif
 
     if (rd.isIndirect()) {
@@ -747,6 +751,8 @@ static inline constexpr14 BinaryOperand12 encodeBinaryOperand12(const RegData &r
 
 #ifdef NGEN_SAFE
     if (rd.isInvalid()) throw invalid_object_exception();
+    if (!rd.isIndirect() && rd.getBase() > 255)
+        throw invalid_operand_exception();
 #endif
 
     if (rd.isIndirect()) {
@@ -791,6 +797,8 @@ static inline constexpr14 TernaryOperand12 encodeTernaryOperand12(const RegData 
 #ifdef NGEN_SAFE
     if (rd.isInvalid()) throw invalid_object_exception();
     if (rd.isIndirect()) throw invalid_operand_exception();
+    if (!rd.isIndirect() && rd.getBase() > 255)
+        throw invalid_operand_exception();
 #endif
 
     TernaryOperand12 op{0};
@@ -811,6 +819,8 @@ static inline constexpr14 TernaryOperand12 encodeTernaryOperand12(const RegData 
 #ifdef NGEN_SAFE
     if (rd.isInvalid()) throw invalid_object_exception();
     if (rd.isIndirect()) throw invalid_operand_exception();
+    if (!rd.isIndirect() && rd.getBase() > 255)
+        throw invalid_operand_exception();
 #endif
 
     TernaryOperand12 op{0};
