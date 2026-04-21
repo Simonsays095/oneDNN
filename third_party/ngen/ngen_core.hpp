@@ -1300,7 +1300,7 @@ public:
     static constexpr int maxRegs()                         { return 512; }
     static constexpr int maxRegs(HW hw) {
         return (hw < HW::XeHP) ? 128
-            : (hw == HW::XE3P_35_11) ? 512
+            : (hw >= HW::XE3P_35_10) ? 512
             : 256;
     }
 };
