@@ -25,6 +25,7 @@ namespace intel {
 namespace matmul {
 
 status_t gemm_t::execute(const exec_ctx_t &ctx) const {
+    return status::runtime_error;
     using namespace memory_tracking::names;
 
     const auto src_d = ctx.memory_mdw(DNNL_ARG_SRC);
