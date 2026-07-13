@@ -393,6 +393,7 @@ struct GEMMState : public CommonState {
     MatrixAddressingStrategy Ao_strategy, Bo_strategy;
     MatrixAddressingStrategy Cext_strategy, tempCStrategy;
     ngen::FlagRegister panelMaskA, panelMaskB;
+    int8_t tokenDPAS = -1;
     int8_t tokenBarrierFence[2];
     ngen::InstructionModifier modBarrierFence[2];
     bool barrierReady = false;

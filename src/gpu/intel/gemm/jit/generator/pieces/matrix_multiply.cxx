@@ -447,6 +447,9 @@ void Generator<hw>::outerProductSystolic(int h, int ha_period, int hb_period, in
             auto N0 = globalCM ? B0 : A0;
             RegData srcC0 = C0;
 
+            if (last && state.tokenDPAS >= 0)
+                mod |= SBID(state.tokenDPAS);
+
             if (rsFix) {
                 GRF v0GRF{V0.getBase()};
                 mov<uint32_t>(8, v0GRF, v0GRF);

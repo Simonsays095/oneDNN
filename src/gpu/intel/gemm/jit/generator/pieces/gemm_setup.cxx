@@ -2502,6 +2502,8 @@ template <HW hw>
 void Generator<hw>::gemmAllocateTokens(const GEMMProblem &problem, const GEMMStrategy &strategy, GEMMState &state)
 {
     bool success = true;
+    state.tokenDPAS = -1;
+
     for (int q = 0; q < strategy.A_copies; q++)
         success &= allocateTokens(state.A_layout, state.A_regs[q], state);
     for (int q = 0; q < strategy.B_copies; q++)
@@ -2524,7 +2526,12 @@ void Generator<hw>::gemmAllocateTokens(const GEMMProblem &problem, const GEMMStr
     success &= allocateTokens(state.Ag_layout, state.Ag_regs, state);
     success &= allocateTokens(state.Bg_layout, state.Bg_regs, state);
 
+    // Reserve a dedicated token for DPAS so matrix read tokens cannot overlap.
+    if (strategy.systolic)
+        state.tokenDPAS = state.tokenAllocator.tryAllocHigh();
+
     if (!success) {
+        state.tokenAllocator.safeRelease(state.tokenDPAS);
         status << "Not enough tokens for k loop." << status_stream::endl;
         clearMappedTokenAllocations(hw, state);
     }

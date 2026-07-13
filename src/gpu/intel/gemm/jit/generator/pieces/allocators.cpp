@@ -141,4 +141,14 @@ int8_t TokenAllocator::tryAlloc()
         return -1;
 }
 
+int8_t TokenAllocator::tryAllocHigh()
+{
+    if (free) {
+        int8_t token = ngen::utils::bsr(free);
+        free &= ~(1 << token);
+        return token;
+    } else
+        return -1;
+}
+
 GEMMSTONE_NAMESPACE_END

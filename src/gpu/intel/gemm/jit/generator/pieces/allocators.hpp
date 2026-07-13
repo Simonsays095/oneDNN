@@ -29,6 +29,7 @@ public:
     TokenAllocator(ngen::HW hw, int grfCount = 128);
 
     int8_t tryAlloc();
+    int8_t tryAllocHigh();
     void release(int8_t token)                      { free |= (1u << token); }
     void safeRelease(int8_t &token)                 { if (token >= 0) release(token); token = -1; }
 
